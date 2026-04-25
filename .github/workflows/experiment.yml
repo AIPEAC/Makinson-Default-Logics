@@ -1,0 +1,22 @@
+name: Default Logic Experiment
+
+on:
+  push:
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install SWI-Prolog
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y swi-prolog
+
+      - name: Run experiment
+        run: swipl -s experiment.pl

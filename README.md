@@ -1,4 +1,4 @@
-# Makinson Default Logics — Monte Carlo Extension-Enumeration Experiment
+# Makinson Default Logics — Extension Experiment using Monte Carlo 
 
 Empirically compare two rule-scheduling strategies for enumerating all
 extensions of a Default Logic theory, implemented in SWI-Prolog.

@@ -145,8 +145,8 @@ n=20  |  conflict_pairs=5  |  extensions=32
 
 * Watching the metrics across different `n` values shows that both the
   permutation count for Strategy A and the total-check count grow with `n`,
-  empirically confirming factorial-like growth in Strategy A versus the
-  polynomial-per-extension cost of Strategy B.
+  empirically confirming the exponential (coupon-collector) growth of Strategy A
+  versus the polynomial-per-extension cost of Strategy B.
 
 ---
 

@@ -34,6 +34,10 @@ n_values([8, 10, 12, 14, 16, 18, 20]).
 %  K conflict pairs for a theory of size N.
 %  Each pair contributes 2 rules and doubles the number of extensions,
 %  so 2^K extensions in total.
+%  The divisor 4 keeps roughly a quarter of the rules as conflict rules and
+%  the remainder as independent rules.  This gives a moderate number of
+%  extensions (2^K) without making K so large that enumeration is impractical
+%  within the default max_perms cap.
 k_for_n(N, K) :- K is max(2, N // 4).
 
 %% mc_runs(?Runs)
@@ -135,6 +139,9 @@ make_indep_rule(I, rule([], [], Atom)) :-
 
 applicable(rule(Pre, Just, _), S) :-
     subset(Pre, S),
+    % member/2 iterates over every element of Just (backtracking generator);
+    % memberchk/2 does a deterministic set-membership test against S.
+    % Together: fail if ANY justification atom is already believed.
     \+ (member(J, Just), memberchk(J, S)).
 
 % ============================================================

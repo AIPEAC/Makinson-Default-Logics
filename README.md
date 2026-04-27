@@ -100,6 +100,9 @@ swipl -s experiment.pl
 ### With Docker (pull from GHCR)
 
 ```bash
+sh ./run.sh
+
+# equivalent manual commands:
 docker compose pull
 docker compose run --rm experiment
 ```

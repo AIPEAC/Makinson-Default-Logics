@@ -144,6 +144,57 @@ make_indep_rule(I, rule([], [], Atom)) :-
     atomic_list_concat([indep, I], '_', Atom).
 
 % ============================================================
+% Conflict-pair helpers (for early process-tree branch cutoff)
+% ============================================================
+
+%% atom_with_prefix_id(+Atom, +Prefix, -Id)
+%  Parses atoms like pos_3 / neg_3.
+
+atom_with_prefix_id(Atom, Prefix, Id) :-
+    atom(Atom),
+    atom_concat(Prefix, '_', PrefixUnderscore),
+    atom_concat(PrefixUnderscore, NumAtom, Atom),
+    atom_number(NumAtom, Id).
+
+%% conflict_pair_id(+Rule, -PairId)
+%  True for generated conflict rules:
+%    rule([], [neg_I], pos_I)  or  rule([], [pos_I], neg_I)
+
+conflict_pair_id(rule([], [Just], Conc), PairId) :-
+    atom_with_prefix_id(Just, neg, PairId),
+    atom_with_prefix_id(Conc, pos, PairId),
+    !.
+conflict_pair_id(rule([], [Just], Conc), PairId) :-
+    atom_with_prefix_id(Just, pos, PairId),
+    atom_with_prefix_id(Conc, neg, PairId),
+    !.
+
+%% collect_conflict_pair_ids(+Rules, -PairIds)
+%  Sorted unique list of pair ids present in the theory.
+
+collect_conflict_pair_ids(Rules, PairIds) :-
+    findall(Id, (member(R, Rules), conflict_pair_id(R, Id)), Ids),
+    sort(Ids, PairIds).
+
+%% update_decided_pairs(+Rule, +Decided0, -Decided1)
+%  Adds pair id when Rule is from a conflict pair; independent rules leave
+%  the decided set unchanged.
+
+update_decided_pairs(Rule, Decided0, Decided1) :-
+    (conflict_pair_id(Rule, PairId), \+ memberchk(PairId, Decided0) ->
+        Decided1 = [PairId | Decided0]
+    ;
+        Decided1 = Decided0
+    ).
+
+%% all_pairs_decided(+AllPairIds, +DecidedPairIds)
+
+all_pairs_decided([], _).
+all_pairs_decided([PairId | Rest], Decided) :-
+    memberchk(PairId, Decided),
+    all_pairs_decided(Rest, Decided).
+
+% ============================================================
 % Applicability Check  (one atomic operation)
 % ============================================================
 % applicable(+Rule, +BeliefSet)
@@ -272,12 +323,20 @@ pt_all_children_exhausted([Sym | Rest], Children) :-
     pt_is_exhausted(Sub),
     pt_all_children_exhausted(Rest, Children).
 
-%% pt_compute_exhausted(+LeafSeen, +Children, +Remaining, -Exhausted)
+%% pt_compute_exhausted(+LeafSeen, +Children, +Remaining,
+%%                     +AllPairIds, +DecidedPairIds, -Exhausted)
 
-pt_compute_exhausted(LeafSeen, _Children, [], Exhausted) :-
+pt_compute_exhausted(LeafSeen, _Children, _Remaining,
+                     AllPairIds, DecidedPairIds, Exhausted) :-
+    all_pairs_decided(AllPairIds, DecidedPairIds),
+    !,
     (LeafSeen == true -> Exhausted = true ; Exhausted = false).
-pt_compute_exhausted(_LeafSeen, Children, Remaining, Exhausted) :-
-    Remaining \= [],
+pt_compute_exhausted(LeafSeen, _Children, [], _AllPairIds, _DecidedPairIds,
+                     Exhausted) :-
+    !,
+    (LeafSeen == true -> Exhausted = true ; Exhausted = false).
+pt_compute_exhausted(_LeafSeen, Children, Remaining, _AllPairIds,
+                     _DecidedPairIds, Exhausted) :-
     (pt_all_children_exhausted(Remaining, Children) ->
         Exhausted = true
     ;
@@ -305,14 +364,17 @@ pick_random_member(List, Elem, Rest) :-
     nth1(Index, List, Elem),
     selectchk(Elem, List, Rest).
 
-%% pt_draw_unique_permutation(+Rules, +Tree0, -Tree1, -Perm, -Status)
-%  Draws one unseen permutation by descending a random, non-exhausted branch.
-%  Status=ok if a fresh leaf was reached, exhausted if no branch remains.
+%% pt_draw_unique_permutation(+Rules, +AllPairIds,
+%%                           +Tree0, -Tree1, -Perm, -Status)
+%  Draws one unseen branch in the process tree.
+%  Early cutoff: as soon as all conflict pairs are decided by the prefix,
+%  this node is treated as terminal (remaining permutations are equivalent).
 
-pt_draw_unique_permutation(Rules, Tree0, Tree1, Perm, Status) :-
-    pt_draw_unique_(Tree0, Rules, Tree1, Perm, Status).
+pt_draw_unique_permutation(Rules, AllPairIds, Tree0, Tree1, Perm, Status) :-
+    pt_draw_unique_(Tree0, Rules, AllPairIds, [], Tree1, Perm, Status).
 
 pt_draw_unique_(pt(LeafSeen0, Exhausted0, Children0), Remaining,
+                AllPairIds, DecidedPairIds0,
                 pt(LeafSeen1, Exhausted1, Children1), Perm, Status) :-
     (Exhausted0 == true ->
         LeafSeen1 = LeafSeen0,
@@ -320,6 +382,21 @@ pt_draw_unique_(pt(LeafSeen0, Exhausted0, Children0), Remaining,
         Children1 = Children0,
         Perm = [],
         Status = exhausted
+    ;
+        all_pairs_decided(AllPairIds, DecidedPairIds0) ->
+        (LeafSeen0 == true ->
+            LeafSeen1 = LeafSeen0,
+            Exhausted1 = true,
+            Children1 = Children0,
+            Perm = [],
+            Status = exhausted
+        ;
+            LeafSeen1 = true,
+            Exhausted1 = true,
+            Children1 = Children0,
+            Perm = [],
+            Status = ok
+        )
     ;
         (Remaining = [] ->
             (LeafSeen0 == true ->
@@ -338,31 +415,40 @@ pt_draw_unique_(pt(LeafSeen0, Exhausted0, Children0), Remaining,
         ;
             pt_available_symbols(Remaining, Children0, Candidates),
             pt_try_candidates(Candidates, Children0, LeafSeen0, Remaining,
+                              AllPairIds, DecidedPairIds0,
                               LeafSeen1, Exhausted1, Children1, Perm, Status)
         )
     ).
 
 %% pt_try_candidates(+Candidates, +Children0, +LeafSeen0, +Remaining,
+%%                   +AllPairIds, +DecidedPairIds0,
 %%                   -LeafSeen1, -Exhausted1, -Children1, -Perm, -Status)
 %  Try random non-exhausted candidate branches until one yields a fresh leaf.
 
 pt_try_candidates([], Children0, LeafSeen0, _Remaining,
+                  _AllPairIds, _DecidedPairIds0,
                   LeafSeen0, true, Children0, [], exhausted).
 pt_try_candidates(Candidates, Children0, LeafSeen0, Remaining,
+                  AllPairIds, DecidedPairIds0,
                   LeafSeen1, Exhausted1, ChildrenOut, Perm, Status) :-
     pick_random_member(Candidates, Sym, RestCandidates),
     selectchk(Sym, Remaining, RestRemaining),
+    update_decided_pairs(Sym, DecidedPairIds0, DecidedPairIds1),
     pt_child_get(Children0, Sym, Child0),
-    pt_draw_unique_(Child0, RestRemaining, Child1, Suffix, ChildStatus),
+    pt_draw_unique_(Child0, RestRemaining,
+                    AllPairIds, DecidedPairIds1,
+                    Child1, Suffix, ChildStatus),
     pt_child_put(Children0, Sym, Child1, Children1),
     (ChildStatus == ok ->
-        pt_compute_exhausted(LeafSeen0, Children1, Remaining, Exhausted1),
+        pt_compute_exhausted(LeafSeen0, Children1, Remaining,
+                            AllPairIds, DecidedPairIds0, Exhausted1),
         LeafSeen1 = LeafSeen0,
         ChildrenOut = Children1,
         Perm = [Sym | Suffix],
         Status = ok
     ;
         pt_try_candidates(RestCandidates, Children1, LeafSeen0, Remaining,
+                          AllPairIds, DecidedPairIds0,
                           LeafSeen1, Exhausted1, ChildrenOut, Perm, Status)
     ).
 
@@ -404,14 +490,15 @@ strategy_a_makinson_loop([R | Rest], Skipped, S, Progress0, C0, SF, CF) :-
     ), !.
 
 strategy_a_find_all(Rules, MaxTrials, Trials, Checks, HitCap) :-
+    collect_conflict_pair_ids(Rules, PairIds),
     pt_empty(UsedSeqTree),
-    strategy_a_loop(Rules, MaxTrials, 0, 0, UsedSeqTree,
+    strategy_a_loop(Rules, PairIds, MaxTrials, 0, 0, UsedSeqTree,
                     Trials, Checks, HitCap).
 
-strategy_a_loop(_, MaxT, T, C, _Used, T, C, yes) :-
+strategy_a_loop(_, _PairIds, MaxT, T, C, _Used, T, C, yes) :-
     T >= MaxT, !.
-strategy_a_loop(Rules, MaxT, T0, C0, Used0, TT, TC, HC) :-
-    pt_draw_unique_permutation(Rules, Used0, Used1, Perm, DrawStatus),
+strategy_a_loop(Rules, PairIds, MaxT, T0, C0, Used0, TT, TC, HC) :-
+    pt_draw_unique_permutation(Rules, PairIds, Used0, Used1, Perm, DrawStatus),
     (DrawStatus = exhausted ->
         TT = T0,
         TC = C0,
@@ -420,7 +507,7 @@ strategy_a_loop(Rules, MaxT, T0, C0, Used0, TT, TC, HC) :-
         strategy_a_makinson_once(Perm, _Ext, ThisC),
         T1 is T0 + 1,
         C1 is C0 + ThisC,
-        strategy_a_loop(Rules, MaxT, T1, C1, Used1, TT, TC, HC)
+        strategy_a_loop(Rules, PairIds, MaxT, T1, C1, Used1, TT, TC, HC)
     ).
 
 run_mc_strategy_a(Rules, MaxTrials, MCRuns,
@@ -479,14 +566,15 @@ strategy_b_makinson_loop([R | Rest], S, NoFire0, C0, SF, CF) :-
     ), !.
 
 strategy_b_find_all(Rules, MaxTrials, Trials, Checks, HitCap) :-
+    collect_conflict_pair_ids(Rules, PairIds),
     pt_empty(UsedSeqTree),
-    strategy_b_loop(Rules, MaxTrials, 0, 0, UsedSeqTree,
+    strategy_b_loop(Rules, PairIds, MaxTrials, 0, 0, UsedSeqTree,
                     Trials, Checks, HitCap).
 
-strategy_b_loop(_, MaxT, T, C, _Used, T, C, yes) :-
+strategy_b_loop(_, _PairIds, MaxT, T, C, _Used, T, C, yes) :-
     T >= MaxT, !.
-strategy_b_loop(Rules, MaxT, T0, C0, Used0, TT, TC, HC) :-
-    pt_draw_unique_permutation(Rules, Used0, Used1, Perm, DrawStatus),
+strategy_b_loop(Rules, PairIds, MaxT, T0, C0, Used0, TT, TC, HC) :-
+    pt_draw_unique_permutation(Rules, PairIds, Used0, Used1, Perm, DrawStatus),
     (DrawStatus = exhausted ->
         TT = T0,
         TC = C0,
@@ -495,7 +583,7 @@ strategy_b_loop(Rules, MaxT, T0, C0, Used0, TT, TC, HC) :-
         strategy_b_makinson_once(Perm, _Ext, ThisC),
         T1 is T0 + 1,
         C1 is C0 + ThisC,
-        strategy_b_loop(Rules, MaxT, T1, C1, Used1, TT, TC, HC)
+        strategy_b_loop(Rules, PairIds, MaxT, T1, C1, Used1, TT, TC, HC)
     ).
 
 run_mc_strategy_b(Rules, MaxTrials, MCRuns,

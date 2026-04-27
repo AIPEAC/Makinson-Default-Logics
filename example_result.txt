@@ -1,0 +1,30 @@
+=================================================================
+Default Logic Extension-Enumeration Experiment
+=================================================================
+
+Monte Carlo runs per n (A/B only)      : 10
+Strategy 0 Xi order                    : 0..(2^k-1)
+Max constructions per strategy run     : 200000
+
+-----------------------------------------------------------------
+n=4  |  conflict_pairs=2  |  extensions=4
+  [0] avg_trials=4.0   avg_checks=16.0   cap_hits=0/10
+  [A] avg_trials=16.0   avg_checks=56.0   cap_hits=0/10
+  [B] avg_trials=16.0   avg_checks=48.0   cap_hits=0/10
+  ratio A_checks/0_checks=3.50   B_checks/0_checks=3.00
+
+-----------------------------------------------------------------
+n=6  |  conflict_pairs=2  |  extensions=4
+  [0] avg_trials=4.0   avg_checks=68.0   cap_hits=0/10
+  [A] avg_trials=240.0   avg_checks=1384.0   cap_hits=0/10
+  [B] avg_trials=240.0   avg_checks=1152.0   cap_hits=0/10
+  ratio A_checks/0_checks=20.35   B_checks/0_checks=16.94
+
+-----------------------------------------------------------------
+n=8  |  conflict_pairs=2  |  extensions=4
+  [0] avg_trials=4.0   avg_checks=136.0   cap_hits=0/10
+  [A] avg_trials=7568.0   avg_checks=63064.0   cap_hits=0/10
+  [B] avg_trials=7568.0   avg_checks=51408.0   cap_hits=0/10
+  ratio A_checks/0_checks=463.71   B_checks/0_checks=378.00
+
+=================================================================

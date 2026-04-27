@@ -1,37 +1,41 @@
-# Makinson Default Logics — Extension Experiment using Monte Carlo 
+# Makinson Default Logics — Extension Enumeration Experiment
 
-Empirically compare two rule-scheduling strategies for enumerating all
-extensions of a Default Logic theory, implemented in SWI-Prolog.
+Empirically compares three extension-construction schedules for Default Logic,
+implemented in SWI-Prolog.
 
 ---
 
 ## Experimental Goal
 
-The experiment measures the cost (total applicability checks) of discovering
-every distinct extension of a default-logic theory under two strategies:
+The experiment measures construction cost (total applicability checks) under
+three strategies:
 
-### Strategy A — Permutation-based / Single Scan
+### Strategy 0 — Reiter baseline (deterministic Xi sweep)
 
-1. Randomly generate a full permutation of the `n` default rules.
-2. Scan the rules **once** in that order.
-3. If a rule is applicable, fire it; if not, skip it and never revisit it in
-   this run.
-4. One permutation produces at most one extension.
-5. The scan is **deterministic** — `cut` suppresses Prolog backtracking;
-   no implicit search.
-6. Repeat with fresh random permutations until all distinct extensions are
-   observed (coupon-collector problem).
+1. Enumerate Xi seeds in binary order: `000...0`, `000...1`, ..., `111...1`.
+2. For each Xi, run deterministic Reiter fixpoint closure.
+3. No random Xi resampling is used in Strategy 0.
 
-### Strategy B — Fixpoint / Full Rescan
+### Strategy A — Makinson with priority skipped-queue
 
-1. Seed the belief set with one of the 2^k possible resolutions of the `k`
-   conflict pairs.
-2. Scan all rules in order; when any rule fires (adds a new atom), **restart
-   immediately from rule 1** (no Prolog backtracking).
-3. Repeat until a complete pass adds nothing — that is the fixpoint extension.
-4. Each construction is **deterministic**.
-5. Enumerate all extensions by running one fixpoint per seed; deduplicate
-   with `msort/2` + `memberchk/2`.
+1. Draw an initial random rule sequence (permutation).
+2. Process queue; when a rule is skipped, store it in a priority skipped-list
+  where older skipped rules have higher priority.
+3. Whenever `IN` updates (a rule fires), revisit skipped rules first.
+4. Constructions are drawn through a permutation process tree.
+
+### Strategy B — Makinson with FIFO skipped-queue
+
+1. Draw an initial random rule sequence (permutation).
+2. Process queue; skipped rules are moved to queue tail (FIFO behavior).
+3. Terminate a construction on a full no-progress round.
+4. Constructions are drawn through the same permutation process tree.
+
+### Process-tree branch cutoff (A/B)
+
+For A/B, the permutation tree is pruned semantically: once a prefix has
+already decided all conflict-pair choices, the remaining order is treated as
+equivalent and that subtree is closed early.
 
 ---
 
@@ -64,15 +68,16 @@ The generated theory contains:
 
 ## Metrics Collected
 
-| Strategy | Metric |
-|----------|--------|
-| A | Average permutations required to observe all distinct extensions (over MC runs) |
-| A | Average total applicability checks (over MC runs) |
-| B | Total fixpoint constructions needed to enumerate all extensions |
-| B | Total applicability checks across all constructions |
+For each strategy and each `n`:
 
-Extension deduplication uses `msort/2` (canonical sorted form) and
-`memberchk/2` (membership test before inserting).
+1. `avg_trials`: average number of constructions attempted over `mc_runs`.
+2. `avg_checks`: average total applicability checks over `mc_runs`.
+3. `cap_hits`: how many runs terminated due to `max_trials` cap.
+
+Ratios versus Strategy 0 are also printed:
+
+1. `A_checks / 0_checks`
+2. `B_checks / 0_checks`
 
 ---
 
@@ -82,10 +87,10 @@ Edit the top of `experiment.pl`:
 
 | Predicate | Default | Description |
 |-----------|---------|-------------|
-| `n_values/1` | `[8,10,12,14,16,18,20]` | List of rule-counts to sweep |
+| `n_values/1` | `[4,6,8]` | List of rule-counts to sweep |
 | `k_for_n/2` | `max(2, N // 4)` | Conflict pairs for a theory of size N |
-| `mc_runs/1` | `10` | Monte Carlo repetitions for Strategy A |
-| `max_perms/1` | `200000` | Safety cap on Strategy-A permutations per trial |
+| `mc_runs/1` | `10` | Number of repeated runs used to average each strategy |
+| `max_trials/1` | `200000` | Safety cap on constructions per strategy run |
 
 ---
 
@@ -131,32 +136,29 @@ The workflow at `.github/workflows/experiment.yml` runs automatically on every
 Default Logic Extension-Enumeration Experiment
 =================================================================
 
-Monte Carlo runs per n (Strategy A) : 10
-Max permutations cap per A-trial    : 200000
+Monte Carlo runs per n (A/B only)      : 10
+Strategy 0 Xi order                    : 0..(2^k-1)
+Max constructions per strategy run     : 200000
 
 -----------------------------------------------------------------
-n=20  |  conflict_pairs=5  |  extensions=32
-  [B] constructions=32   total_checks=5600   found=32/32
-  [A] avg_perms=119.4   avg_checks=2388.0   cap_hits=0/10
-  ratio A_checks/B_checks=0.43
+n=8  |  conflict_pairs=2  |  extensions=4
+  [0] avg_trials=4.0   avg_checks=96.0   cap_hits=0/10
+  [A] avg_trials=...   avg_checks=...    cap_hits=.../10
+  [B] avg_trials=...   avg_checks=...    cap_hits=.../10
+  ratio A_checks/0_checks=...   B_checks/0_checks=...
 ```
 
 ### Interpreting the Results
 
-* **Strategy B** runs exactly 2^k fixpoint constructions — one per extension.
-  Each construction involves repeated passes over all `n` rules (restarting on
-  every new atom), so its per-construction cost grows as O(n × n_indep).
+* **Strategy 0** no longer pays coupon-collector overhead from Xi resampling,
+  because Xi is enumerated once in increasing binary order.
 
-* **Strategy A** exhibits coupon-collector growth: as `k` (and therefore the
-  number of extensions) increases, the expected number of random permutations
-  needed to cover all extensions grows as O(2^k · k · ln 2), making it scale
-  super-linearly with the number of extensions.  Each permutation costs exactly
-  `n` applicability checks (one pass).
+* **A/B** traverse permutation space via a process tree. Their branch-pruning
+  rule can collapse many permutations that are semantically equivalent after a
+  deciding prefix.
 
-* Watching the metrics across different `n` values shows that both the
-  permutation count for Strategy A and the total-check count grow with `n`,
-  empirically confirming the exponential (coupon-collector) growth of Strategy A
-  versus the polynomial-per-extension cost of Strategy B.
+* If `cap_hits` is nonzero, that strategy reached `max_trials` before fully
+  exhausting its current search process in that run.
 
 ---
 

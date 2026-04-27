@@ -97,15 +97,22 @@ Edit the top of `experiment.pl`:
 swipl -s experiment.pl
 ```
 
-### With Docker
+### With Docker (pull from GHCR)
+
+```bash
+docker compose pull
+docker compose run --rm experiment
+```
+
+### With Docker (local build, optional)
 
 ```bash
 docker build -t default-logic-exp .
 docker run --rm default-logic-exp
 ```
 
-The container is based on the official `swipl` image; no network access is
-required at runtime.
+The default container source is GitHub Container Registry:
+`ghcr.io/aipeac/makinson-default-logics:latest`.
 
 ### Via GitHub Actions
 

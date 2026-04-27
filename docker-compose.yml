@@ -1,0 +1,5 @@
+services:
+  experiment:
+    image: ghcr.io/aipeac/makinson-default-logics:latest
+    container_name: makinson-default-logics
+    working_dir: /experiment

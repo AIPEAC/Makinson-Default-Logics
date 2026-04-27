@@ -49,13 +49,8 @@ mc_runs(10).
 
 %% max_trials(?Cap)
 %  Hard cap on randomized construction attempts per strategy trial.
-%  If all extensions are found before this limit the trial terminates early.
+%  A and B stop earlier only when their permutation process tree is exhausted.
 max_trials(200000).
-
-%% max_unique_draw_retries(?Cap)
-%  Safety cap while trying to draw a fresh unseen initial rule sequence.
-%  Prevents infinite retry if the sampled space is exhausted for a run.
-max_unique_draw_retries(10000).
 
 % ============================================================
 % Entry Point
@@ -94,7 +89,7 @@ run_experiment_for_n(N) :-
         [AvgTr0, AvgChk0, Hit0, MCRuns]),
 
     % --- Strategy A : Makinson priority re-check of skipped rules ---
-    run_mc_strategy_a(Rules, NumExts, MaxTrials, MCRuns,
+    run_mc_strategy_a(Rules, MaxTrials, MCRuns,
              SumTrA, SumChkA, HitA),
     AvgTrA  is SumTrA  / MCRuns,
     AvgChkA is SumChkA / MCRuns,
@@ -102,7 +97,7 @@ run_experiment_for_n(N) :-
         [AvgTrA, AvgChkA, HitA, MCRuns]),
 
     % --- Strategy B : Makinson FIFO queue ---
-    run_mc_strategy_b(Rules, NumExts, MaxTrials, MCRuns,
+    run_mc_strategy_b(Rules, MaxTrials, MCRuns,
              SumTrB, SumChkB, HitB),
     AvgTrB  is SumTrB  / MCRuns,
     AvgChkB is SumChkB / MCRuns,
@@ -237,57 +232,112 @@ run_mc_strategy_0_(Rules, K, NumExts, MaxT, Rem, Seed,
 % ============================================================
 
 %% pt_empty(-Tree)
-%  Tree node representation: pt(TerminalSeen, Children)
-%  Children entries are child(Symbol, Subtree).
+%  Tree node representation: pt(LeafSeen, Exhausted, Children)
+%  - LeafSeen  : whether this exact prefix-as-full-sequence was visited
+%  - Exhausted : whether this subtree has no unseen branches left
+%  - Children  : list of child(Symbol, Subtree)
 
-pt_empty(pt(false, [])).
+pt_empty(pt(false, false, [])).
 
-%% pt_member(+Tree, +Sequence)
-%  True if Sequence already exists in the process tree.
+%% pt_is_exhausted(+Tree)
 
-pt_member(pt(Term, _), []) :-
-    Term == true.
-pt_member(pt(_, Children), [X | Xs]) :-
-    member(child(X, Sub), Children),
-    pt_member(Sub, Xs).
+pt_is_exhausted(pt(_, Exhausted, _)) :-
+    Exhausted == true.
 
-%% pt_insert(+Tree0, +Sequence, -Tree1, -Added)
-%  Adds Sequence to the process tree.
-%  Added=yes when Sequence was new, Added=no when it already existed.
+%% pt_child_get(+Children, +Symbol, -Subtree)
+%  Missing child means unseen subtree.
 
-pt_insert(pt(Term0, Children0), [], pt(Term1, Children0), Added) :-
-    (Term0 == true ->
-        Term1 = true,
-        Added = no
+pt_child_get(Children, Symbol, Subtree) :-
+    (member(child(Symbol, Found), Children) ->
+        Subtree = Found
     ;
-        Term1 = true,
-        Added = yes
-    ).
-pt_insert(pt(Term0, Children0), [X | Xs], pt(Term0, Children1), Added) :-
-    (select(child(X, Sub0), Children0, Rest) ->
-        pt_insert(Sub0, Xs, Sub1, Added),
-        Children1 = [child(X, Sub1) | Rest]
-    ;
-        pt_insert(pt(false, []), Xs, Sub1, _),
-        Children1 = [child(X, Sub1) | Children0],
-        Added = yes
+        pt_empty(Subtree)
     ).
 
-%% draw_unique_rule_sequence(+Rules, +Tree0, -Tree1, -Perm,
-%%                           +RetriesLeft, -Status)
-%  Randomly draws a permutation not yet used in this run.
-%  Status=ok if successful, Status=exhausted if retries ran out.
+%% pt_child_put(+Children0, +Symbol, +Subtree, -Children1)
 
-draw_unique_rule_sequence(_, Tree, Tree, _, 0, exhausted) :- !.
-draw_unique_rule_sequence(Rules, Tree0, Tree1, Perm, RetriesLeft, Status) :-
-    random_permutation(Rules, Cand),
-    (pt_member(Tree0, Cand) ->
-        Retries1 is RetriesLeft - 1,
-        draw_unique_rule_sequence(Rules, Tree0, Tree1, Perm, Retries1, Status)
+pt_child_put(Children0, Symbol, Subtree, Children1) :-
+    (select(child(Symbol, _), Children0, Rest) ->
+        Children1 = [child(Symbol, Subtree) | Rest]
     ;
-        pt_insert(Tree0, Cand, Tree1, yes),
-        Perm = Cand,
-        Status = ok
+        Children1 = [child(Symbol, Subtree) | Children0]
+    ).
+
+%% pt_all_children_exhausted(+Remaining, +Children)
+%  True when every next-step symbol already has an exhausted subtree.
+
+pt_all_children_exhausted([], _).
+pt_all_children_exhausted([Sym | Rest], Children) :-
+    member(child(Sym, Sub), Children),
+    pt_is_exhausted(Sub),
+    pt_all_children_exhausted(Rest, Children).
+
+%% pt_compute_exhausted(+LeafSeen, +Children, +Remaining, -Exhausted)
+
+pt_compute_exhausted(LeafSeen, _Children, [], Exhausted) :-
+    (LeafSeen == true -> Exhausted = true ; Exhausted = false).
+pt_compute_exhausted(_LeafSeen, Children, Remaining, Exhausted) :-
+    Remaining \= [],
+    (pt_all_children_exhausted(Remaining, Children) ->
+        Exhausted = true
+    ;
+        Exhausted = false
+    ).
+
+%% pt_available_symbols(+Remaining, +Children, -Candidates)
+%  Candidates are symbols whose branch still has unseen leaves.
+
+pt_available_symbols([], _Children, []).
+pt_available_symbols([Sym | Rest], Children, Candidates) :-
+    (member(child(Sym, Sub), Children), pt_is_exhausted(Sub) ->
+        pt_available_symbols(Rest, Children, Candidates)
+    ;
+        Candidates = [Sym | Tail],
+        pt_available_symbols(Rest, Children, Tail)
+    ).
+
+%% pt_draw_unique_permutation(+Rules, +Tree0, -Tree1, -Perm, -Status)
+%  Draws one unseen permutation by descending a random, non-exhausted branch.
+%  Status=ok if a fresh leaf was reached, exhausted if no branch remains.
+
+pt_draw_unique_permutation(Rules, Tree0, Tree1, Perm, Status) :-
+    pt_draw_unique_(Tree0, Rules, Tree1, Perm, Status).
+
+pt_draw_unique_(pt(LeafSeen0, Exhausted0, Children0), Remaining,
+                pt(LeafSeen1, Exhausted1, Children1), Perm, Status) :-
+    (Exhausted0 == true ->
+        LeafSeen1 = LeafSeen0,
+        Exhausted1 = Exhausted0,
+        Children1 = Children0,
+        Perm = [],
+        Status = exhausted
+    ;
+        (Remaining = [] ->
+            LeafSeen1 = true,
+            Exhausted1 = true,
+            Children1 = Children0,
+            Perm = [],
+            Status = ok
+        ;
+            pt_available_symbols(Remaining, Children0, Candidates),
+            (Candidates = [] ->
+                LeafSeen1 = LeafSeen0,
+                Exhausted1 = true,
+                Children1 = Children0,
+                Perm = [],
+                Status = exhausted
+            ;
+                random_member(Sym, Candidates),
+                select(Sym, Remaining, RestRemaining),
+                pt_child_get(Children0, Sym, Child0),
+                pt_draw_unique_(Child0, RestRemaining, Child1, Suffix, ok),
+                pt_child_put(Children0, Sym, Child1, Children1),
+                pt_compute_exhausted(LeafSeen0, Children1, Remaining, Exhausted1),
+                LeafSeen1 = LeafSeen0,
+                Perm = [Sym | Suffix],
+                Status = ok
+            )
+        )
     ).
 
 % ============================================================
@@ -327,48 +377,42 @@ strategy_a_makinson_loop([R | Rest], Skipped, S, Progress0, C0, SF, CF) :-
         strategy_a_makinson_loop(Rest, Skipped1, S, Progress0, C1, SF, CF)
     ), !.
 
-strategy_a_find_all(Rules, TargetNum, MaxTrials,
-                    AllExts, Trials, Checks, HitCap) :-
+strategy_a_find_all(Rules, MaxTrials, Trials, Checks, HitCap) :-
     pt_empty(UsedSeqTree),
-    strategy_a_loop(Rules, TargetNum, MaxTrials, [], 0, 0, UsedSeqTree,
-                    AllExts, Trials, Checks, HitCap).
+    strategy_a_loop(Rules, MaxTrials, 0, 0, UsedSeqTree,
+                    Trials, Checks, HitCap).
 
-strategy_a_loop(_, Tgt, _, Found, T, C, _Used, Found, T, C, no) :-
-    length(Found, L), L >= Tgt, !.
-strategy_a_loop(_, _, MaxT, Found, T, C, _Used, Found, T, C, yes) :-
+strategy_a_loop(_, MaxT, T, C, _Used, T, C, yes) :-
     T >= MaxT, !.
-strategy_a_loop(Rules, Tgt, MaxT, Found, T0, C0, Used0, AF, TT, TC, HC) :-
-    max_unique_draw_retries(MaxRetry),
-    draw_unique_rule_sequence(Rules, Used0, Used1, Perm, MaxRetry, DrawStatus),
+strategy_a_loop(Rules, MaxT, T0, C0, Used0, TT, TC, HC) :-
+    pt_draw_unique_permutation(Rules, Used0, Used1, Perm, DrawStatus),
     (DrawStatus = exhausted ->
-        AF = Found,
         TT = T0,
         TC = C0,
-        HC = yes
+        HC = no
     ;
-        strategy_a_makinson_once(Perm, Ext, ThisC),
+        strategy_a_makinson_once(Perm, _Ext, ThisC),
         T1 is T0 + 1,
         C1 is C0 + ThisC,
-        (memberchk(Ext, Found) -> F1 = Found ; F1 = [Ext | Found]),
-        strategy_a_loop(Rules, Tgt, MaxT, F1, T1, C1, Used1, AF, TT, TC, HC)
+        strategy_a_loop(Rules, MaxT, T1, C1, Used1, TT, TC, HC)
     ).
 
-run_mc_strategy_a(Rules, NumExts, MaxTrials, MCRuns,
+run_mc_strategy_a(Rules, MaxTrials, MCRuns,
                   SumTrials, SumChecks, TotHit) :-
-    run_mc_strategy_a_(Rules, NumExts, MaxTrials, MCRuns, 1,
+    run_mc_strategy_a_(Rules, MaxTrials, MCRuns, 1,
                        0, 0, 0, SumTrials, SumChecks, TotHit).
 
-run_mc_strategy_a_(_, _, _, 0, _, ST, SC, SH, ST, SC, SH) :- !.
-run_mc_strategy_a_(Rules, NumExts, MaxT, Rem, Seed,
+run_mc_strategy_a_(_, _, 0, _, ST, SC, SH, ST, SC, SH) :- !.
+run_mc_strategy_a_(Rules, MaxT, Rem, Seed,
                    ST0, SC0, SH0, ST, SC, SH) :-
     set_random(seed(Seed)),
-    strategy_a_find_all(Rules, NumExts, MaxT, _, Trials, Checks, Hit),
+    strategy_a_find_all(Rules, MaxT, Trials, Checks, Hit),
     ST1 is ST0 + Trials,
     SC1 is SC0 + Checks,
     (Hit = yes -> SH1 is SH0 + 1 ; SH1 = SH0),
     Seed1 is Seed + 1,
     Rem1  is Rem  - 1,
-    run_mc_strategy_a_(Rules, NumExts, MaxT, Rem1, Seed1,
+    run_mc_strategy_a_(Rules, MaxT, Rem1, Seed1,
                        ST1, SC1, SH1, ST, SC, SH).
 
 % ============================================================
@@ -408,48 +452,42 @@ strategy_b_makinson_loop([R | Rest], S, NoFire0, C0, SF, CF) :-
         )
     ), !.
 
-strategy_b_find_all(Rules, TargetNum, MaxTrials,
-                    AllExts, Trials, Checks, HitCap) :-
+strategy_b_find_all(Rules, MaxTrials, Trials, Checks, HitCap) :-
     pt_empty(UsedSeqTree),
-    strategy_b_loop(Rules, TargetNum, MaxTrials, [], 0, 0, UsedSeqTree,
-                    AllExts, Trials, Checks, HitCap).
+    strategy_b_loop(Rules, MaxTrials, 0, 0, UsedSeqTree,
+                    Trials, Checks, HitCap).
 
-strategy_b_loop(_, Tgt, _, Found, T, C, _Used, Found, T, C, no) :-
-    length(Found, L), L >= Tgt, !.
-strategy_b_loop(_, _, MaxT, Found, T, C, _Used, Found, T, C, yes) :-
+strategy_b_loop(_, MaxT, T, C, _Used, T, C, yes) :-
     T >= MaxT, !.
-strategy_b_loop(Rules, Tgt, MaxT, Found, T0, C0, Used0, AF, TT, TC, HC) :-
-    max_unique_draw_retries(MaxRetry),
-    draw_unique_rule_sequence(Rules, Used0, Used1, Perm, MaxRetry, DrawStatus),
+strategy_b_loop(Rules, MaxT, T0, C0, Used0, TT, TC, HC) :-
+    pt_draw_unique_permutation(Rules, Used0, Used1, Perm, DrawStatus),
     (DrawStatus = exhausted ->
-        AF = Found,
         TT = T0,
         TC = C0,
-        HC = yes
+        HC = no
     ;
-        strategy_b_makinson_once(Perm, Ext, ThisC),
+        strategy_b_makinson_once(Perm, _Ext, ThisC),
         T1 is T0 + 1,
         C1 is C0 + ThisC,
-        (memberchk(Ext, Found) -> F1 = Found ; F1 = [Ext | Found]),
-        strategy_b_loop(Rules, Tgt, MaxT, F1, T1, C1, Used1, AF, TT, TC, HC)
+        strategy_b_loop(Rules, MaxT, T1, C1, Used1, TT, TC, HC)
     ).
 
-run_mc_strategy_b(Rules, NumExts, MaxTrials, MCRuns,
+run_mc_strategy_b(Rules, MaxTrials, MCRuns,
                   SumTrials, SumChecks, TotHit) :-
-    run_mc_strategy_b_(Rules, NumExts, MaxTrials, MCRuns, 1,
+    run_mc_strategy_b_(Rules, MaxTrials, MCRuns, 1,
                        0, 0, 0, SumTrials, SumChecks, TotHit).
 
-run_mc_strategy_b_(_, _, _, 0, _, ST, SC, SH, ST, SC, SH) :- !.
-run_mc_strategy_b_(Rules, NumExts, MaxT, Rem, Seed,
+run_mc_strategy_b_(_, _, 0, _, ST, SC, SH, ST, SC, SH) :- !.
+run_mc_strategy_b_(Rules, MaxT, Rem, Seed,
                    ST0, SC0, SH0, ST, SC, SH) :-
     set_random(seed(Seed)),
-    strategy_b_find_all(Rules, NumExts, MaxT, _, Trials, Checks, Hit),
+    strategy_b_find_all(Rules, MaxT, Trials, Checks, Hit),
     ST1 is ST0 + Trials,
     SC1 is SC0 + Checks,
     (Hit = yes -> SH1 is SH0 + 1 ; SH1 = SH0),
     Seed1 is Seed + 1,
     Rem1  is Rem  - 1,
-    run_mc_strategy_b_(Rules, NumExts, MaxT, Rem1, Seed1,
+    run_mc_strategy_b_(Rules, MaxT, Rem1, Seed1,
                        ST1, SC1, SH1, ST, SC, SH).
 
 %% idx_to_init(+K, +Idx, -InitSet)

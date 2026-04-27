@@ -52,6 +52,11 @@ mc_runs(10).
 %  If all extensions are found before this limit the trial terminates early.
 max_trials(200000).
 
+%% max_unique_draw_retries(?Cap)
+%  Safety cap while trying to draw a fresh unseen initial rule sequence.
+%  Prevents infinite retry if the sampled space is exhausted for a run.
+max_unique_draw_retries(10000).
+
 % ============================================================
 % Entry Point
 % ============================================================
@@ -228,6 +233,64 @@ run_mc_strategy_0_(Rules, K, NumExts, MaxT, Rem, Seed,
                        ST1, SC1, SH1, ST, SC, SH).
 
 % ============================================================
+% Process tree for unique initial rule sequences (A/B)
+% ============================================================
+
+%% pt_empty(-Tree)
+%  Tree node representation: pt(TerminalSeen, Children)
+%  Children entries are child(Symbol, Subtree).
+
+pt_empty(pt(false, [])).
+
+%% pt_member(+Tree, +Sequence)
+%  True if Sequence already exists in the process tree.
+
+pt_member(pt(Term, _), []) :-
+    Term == true.
+pt_member(pt(_, Children), [X | Xs]) :-
+    member(child(X, Sub), Children),
+    pt_member(Sub, Xs).
+
+%% pt_insert(+Tree0, +Sequence, -Tree1, -Added)
+%  Adds Sequence to the process tree.
+%  Added=yes when Sequence was new, Added=no when it already existed.
+
+pt_insert(pt(Term0, Children0), [], pt(Term1, Children0), Added) :-
+    (Term0 == true ->
+        Term1 = true,
+        Added = no
+    ;
+        Term1 = true,
+        Added = yes
+    ).
+pt_insert(pt(Term0, Children0), [X | Xs], pt(Term0, Children1), Added) :-
+    (select(child(X, Sub0), Children0, Rest) ->
+        pt_insert(Sub0, Xs, Sub1, Added),
+        Children1 = [child(X, Sub1) | Rest]
+    ;
+        pt_insert(pt(false, []), Xs, Sub1, _),
+        Children1 = [child(X, Sub1) | Children0],
+        Added = yes
+    ).
+
+%% draw_unique_rule_sequence(+Rules, +Tree0, -Tree1, -Perm,
+%%                           +RetriesLeft, -Status)
+%  Randomly draws a permutation not yet used in this run.
+%  Status=ok if successful, Status=exhausted if retries ran out.
+
+draw_unique_rule_sequence(_, Tree, Tree, _, 0, exhausted) :- !.
+draw_unique_rule_sequence(Rules, Tree0, Tree1, Perm, RetriesLeft, Status) :-
+    random_permutation(Rules, Cand),
+    (pt_member(Tree0, Cand) ->
+        Retries1 is RetriesLeft - 1,
+        draw_unique_rule_sequence(Rules, Tree0, Tree1, Perm, Retries1, Status)
+    ;
+        pt_insert(Tree0, Cand, Tree1, yes),
+        Perm = Cand,
+        Status = ok
+    ).
+
+% ============================================================
 % Strategy A : Makinson with priority queue for skipped rules
 % ============================================================
 
@@ -266,20 +329,29 @@ strategy_a_makinson_loop([R | Rest], Skipped, S, Progress0, C0, SF, CF) :-
 
 strategy_a_find_all(Rules, TargetNum, MaxTrials,
                     AllExts, Trials, Checks, HitCap) :-
-    strategy_a_loop(Rules, TargetNum, MaxTrials, [], 0, 0,
+    pt_empty(UsedSeqTree),
+    strategy_a_loop(Rules, TargetNum, MaxTrials, [], 0, 0, UsedSeqTree,
                     AllExts, Trials, Checks, HitCap).
 
-strategy_a_loop(_, Tgt, _, Found, T, C, Found, T, C, no) :-
+strategy_a_loop(_, Tgt, _, Found, T, C, _Used, Found, T, C, no) :-
     length(Found, L), L >= Tgt, !.
-strategy_a_loop(_, _, MaxT, Found, T, C, Found, T, C, yes) :-
+strategy_a_loop(_, _, MaxT, Found, T, C, _Used, Found, T, C, yes) :-
     T >= MaxT, !.
-strategy_a_loop(Rules, Tgt, MaxT, Found, T0, C0, AF, TT, TC, HC) :-
-    random_permutation(Rules, Perm),
-    strategy_a_makinson_once(Perm, Ext, ThisC),
-    T1 is T0 + 1,
-    C1 is C0 + ThisC,
-    (memberchk(Ext, Found) -> F1 = Found ; F1 = [Ext | Found]),
-    strategy_a_loop(Rules, Tgt, MaxT, F1, T1, C1, AF, TT, TC, HC).
+strategy_a_loop(Rules, Tgt, MaxT, Found, T0, C0, Used0, AF, TT, TC, HC) :-
+    max_unique_draw_retries(MaxRetry),
+    draw_unique_rule_sequence(Rules, Used0, Used1, Perm, MaxRetry, DrawStatus),
+    (DrawStatus = exhausted ->
+        AF = Found,
+        TT = T0,
+        TC = C0,
+        HC = yes
+    ;
+        strategy_a_makinson_once(Perm, Ext, ThisC),
+        T1 is T0 + 1,
+        C1 is C0 + ThisC,
+        (memberchk(Ext, Found) -> F1 = Found ; F1 = [Ext | Found]),
+        strategy_a_loop(Rules, Tgt, MaxT, F1, T1, C1, Used1, AF, TT, TC, HC)
+    ).
 
 run_mc_strategy_a(Rules, NumExts, MaxTrials, MCRuns,
                   SumTrials, SumChecks, TotHit) :-
@@ -338,20 +410,29 @@ strategy_b_makinson_loop([R | Rest], S, NoFire0, C0, SF, CF) :-
 
 strategy_b_find_all(Rules, TargetNum, MaxTrials,
                     AllExts, Trials, Checks, HitCap) :-
-    strategy_b_loop(Rules, TargetNum, MaxTrials, [], 0, 0,
+    pt_empty(UsedSeqTree),
+    strategy_b_loop(Rules, TargetNum, MaxTrials, [], 0, 0, UsedSeqTree,
                     AllExts, Trials, Checks, HitCap).
 
-strategy_b_loop(_, Tgt, _, Found, T, C, Found, T, C, no) :-
+strategy_b_loop(_, Tgt, _, Found, T, C, _Used, Found, T, C, no) :-
     length(Found, L), L >= Tgt, !.
-strategy_b_loop(_, _, MaxT, Found, T, C, Found, T, C, yes) :-
+strategy_b_loop(_, _, MaxT, Found, T, C, _Used, Found, T, C, yes) :-
     T >= MaxT, !.
-strategy_b_loop(Rules, Tgt, MaxT, Found, T0, C0, AF, TT, TC, HC) :-
-    random_permutation(Rules, Perm),
-    strategy_b_makinson_once(Perm, Ext, ThisC),
-    T1 is T0 + 1,
-    C1 is C0 + ThisC,
-    (memberchk(Ext, Found) -> F1 = Found ; F1 = [Ext | Found]),
-    strategy_b_loop(Rules, Tgt, MaxT, F1, T1, C1, AF, TT, TC, HC).
+strategy_b_loop(Rules, Tgt, MaxT, Found, T0, C0, Used0, AF, TT, TC, HC) :-
+    max_unique_draw_retries(MaxRetry),
+    draw_unique_rule_sequence(Rules, Used0, Used1, Perm, MaxRetry, DrawStatus),
+    (DrawStatus = exhausted ->
+        AF = Found,
+        TT = T0,
+        TC = C0,
+        HC = yes
+    ;
+        strategy_b_makinson_once(Perm, Ext, ThisC),
+        T1 is T0 + 1,
+        C1 is C0 + ThisC,
+        (memberchk(Ext, Found) -> F1 = Found ; F1 = [Ext | Found]),
+        strategy_b_loop(Rules, Tgt, MaxT, F1, T1, C1, Used1, AF, TT, TC, HC)
+    ).
 
 run_mc_strategy_b(Rules, NumExts, MaxTrials, MCRuns,
                   SumTrials, SumChecks, TotHit) :-

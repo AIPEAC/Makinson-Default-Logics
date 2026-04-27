@@ -18,7 +18,6 @@ update_to_newest_images() {
     echo "Trying to refresh images from remote registry..."
     if docker compose -f "${COMPOSE_FILE}" pull; then
         echo "Image refresh succeeded."
-		docker system prune -f --filter "until=24h" --filter "label=makinson-default-logics" 
     else
         echo "Image refresh failed. Continuing with local cached image." >&2
     fi

@@ -180,4 +180,4 @@ n=8  |  conflict_pairs=2  |  extensions=4
 
 * **SWI-Prolog ≥ 8.0** (uses `library(lists)`, `library(random)`,
   `library(apply)`)
-* No external services or network access needed
+* Or **Docker** (compose directly from remote)

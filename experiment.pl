@@ -248,7 +248,7 @@ pt_is_exhausted(pt(_, Exhausted, _)) :-
 %  Missing child means unseen subtree.
 
 pt_child_get(Children, Symbol, Subtree) :-
-    (member(child(Symbol, Found), Children) ->
+    (memberchk(child(Symbol, Found), Children) ->
         Subtree = Found
     ;
         pt_empty(Subtree)
@@ -257,7 +257,7 @@ pt_child_get(Children, Symbol, Subtree) :-
 %% pt_child_put(+Children0, +Symbol, +Subtree, -Children1)
 
 pt_child_put(Children0, Symbol, Subtree, Children1) :-
-    (select(child(Symbol, _), Children0, Rest) ->
+    (selectchk(child(Symbol, _), Children0, Rest) ->
         Children1 = [child(Symbol, Subtree) | Rest]
     ;
         Children1 = [child(Symbol, Subtree) | Children0]
@@ -289,12 +289,21 @@ pt_compute_exhausted(_LeafSeen, Children, Remaining, Exhausted) :-
 
 pt_available_symbols([], _Children, []).
 pt_available_symbols([Sym | Rest], Children, Candidates) :-
-    (member(child(Sym, Sub), Children), pt_is_exhausted(Sub) ->
+    (memberchk(child(Sym, Sub), Children), pt_is_exhausted(Sub) ->
         pt_available_symbols(Rest, Children, Candidates)
     ;
         Candidates = [Sym | Tail],
         pt_available_symbols(Rest, Children, Tail)
     ).
+
+%% pick_random_member(+List, -Elem, -Rest)
+%  Deterministically pick one random element and return the remaining list.
+
+pick_random_member(List, Elem, Rest) :-
+    length(List, Len),
+    random_between(1, Len, Index),
+    nth1(Index, List, Elem),
+    selectchk(Elem, List, Rest).
 
 %% pt_draw_unique_permutation(+Rules, +Tree0, -Tree1, -Perm, -Status)
 %  Draws one unseen permutation by descending a random, non-exhausted branch.
@@ -313,31 +322,48 @@ pt_draw_unique_(pt(LeafSeen0, Exhausted0, Children0), Remaining,
         Status = exhausted
     ;
         (Remaining = [] ->
-            LeafSeen1 = true,
-            Exhausted1 = true,
-            Children1 = Children0,
-            Perm = [],
-            Status = ok
-        ;
-            pt_available_symbols(Remaining, Children0, Candidates),
-            (Candidates = [] ->
+            (LeafSeen0 == true ->
                 LeafSeen1 = LeafSeen0,
                 Exhausted1 = true,
                 Children1 = Children0,
                 Perm = [],
                 Status = exhausted
             ;
-                random_member(Sym, Candidates),
-                select(Sym, Remaining, RestRemaining),
-                pt_child_get(Children0, Sym, Child0),
-                pt_draw_unique_(Child0, RestRemaining, Child1, Suffix, ok),
-                pt_child_put(Children0, Sym, Child1, Children1),
-                pt_compute_exhausted(LeafSeen0, Children1, Remaining, Exhausted1),
-                LeafSeen1 = LeafSeen0,
-                Perm = [Sym | Suffix],
+                LeafSeen1 = true,
+                Exhausted1 = true,
+                Children1 = Children0,
+                Perm = [],
                 Status = ok
             )
+        ;
+            pt_available_symbols(Remaining, Children0, Candidates),
+            pt_try_candidates(Candidates, Children0, LeafSeen0, Remaining,
+                              LeafSeen1, Exhausted1, Children1, Perm, Status)
         )
+    ).
+
+%% pt_try_candidates(+Candidates, +Children0, +LeafSeen0, +Remaining,
+%%                   -LeafSeen1, -Exhausted1, -Children1, -Perm, -Status)
+%  Try random non-exhausted candidate branches until one yields a fresh leaf.
+
+pt_try_candidates([], Children0, LeafSeen0, _Remaining,
+                  LeafSeen0, true, Children0, [], exhausted).
+pt_try_candidates(Candidates, Children0, LeafSeen0, Remaining,
+                  LeafSeen1, Exhausted1, ChildrenOut, Perm, Status) :-
+    pick_random_member(Candidates, Sym, RestCandidates),
+    selectchk(Sym, Remaining, RestRemaining),
+    pt_child_get(Children0, Sym, Child0),
+    pt_draw_unique_(Child0, RestRemaining, Child1, Suffix, ChildStatus),
+    pt_child_put(Children0, Sym, Child1, Children1),
+    (ChildStatus == ok ->
+        pt_compute_exhausted(LeafSeen0, Children1, Remaining, Exhausted1),
+        LeafSeen1 = LeafSeen0,
+        ChildrenOut = Children1,
+        Perm = [Sym | Suffix],
+        Status = ok
+    ;
+        pt_try_candidates(RestCandidates, Children1, LeafSeen0, Remaining,
+                          LeafSeen1, Exhausted1, ChildrenOut, Perm, Status)
     ).
 
 % ============================================================

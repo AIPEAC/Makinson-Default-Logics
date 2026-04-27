@@ -2,19 +2,22 @@
 %%% Reproducible Monte Carlo experiment comparing two default-logic
 %%% extension-enumeration strategies.
 %%%
-%%% Strategy A  Permutation-based / Single Scan
-%%%   - Randomly permute the n rules; scan once in order.
-%%%   - Apply a rule if applicable; skip and never revisit otherwise.
-%%%   - One permutation => at most one extension.
-%%%   - Repeat with different random permutations until all distinct
-%%%     extensions are discovered (coupon-collector problem).
+%%% Strategy 0  Reiter baseline (random Xi)
+%%%   - Repeatedly draw a random Xi seed (conflict resolution choice).
+%%%   - Run deterministic Reiter-style fixpoint closure from that Xi.
+%%%   - Keep sampling until all extensions are discovered (or cap).
 %%%
-%%% Strategy B  Fixpoint / Full Rescan
-%%%   - Whenever a default fires and adds a new atom, restart scanning
-%%%     from rule 1 immediately (deterministic, no backtracking).
-%%%   - Repeat until no rule fires => one fixpoint extension.
-%%%   - Enumerate all extensions by seeding the fixpoint with each of
-%%%     the 2^k possible resolutions of the k conflict pairs.
+%%% Strategy A  Makinson with priority queue for skipped rules
+%%%   - Draw a random rule sequence.
+%%%   - If a rule is skipped (trigger not yet enabled), store it in a
+%%%     priority queue where older skipped rules have higher priority.
+%%%   - Whenever IN updates, revisit skipped rules first (oldest first).
+%%%
+%%% Strategy B  Makinson with FIFO queue for skipped rules
+%%%   - Draw a random rule sequence.
+%%%   - If a rule is skipped, move it to the tail of the queue.
+%%%   - Terminate on a full no-progress round (no rule fired while
+%%%     visiting each queued rule once), preventing infinite cycling.
 %%%
 %%% See README.md for full description and usage instructions.
 
@@ -41,13 +44,13 @@ n_values([8, 10, 12, 14, 16, 18, 20]).
 k_for_n(N, K) :- K is max(2, N // 4).
 
 %% mc_runs(?Runs)
-%  Number of independent Strategy-A Monte Carlo trials per n value.
+%  Number of independent Monte Carlo trials per strategy and per n value.
 mc_runs(10).
 
-%% max_perms(?Cap)
-%  Hard cap on the number of random permutations per Strategy-A trial.
+%% max_trials(?Cap)
+%  Hard cap on randomized construction attempts per strategy trial.
 %  If all extensions are found before this limit the trial terminates early.
-max_perms(200000).
+max_trials(200000).
 
 % ============================================================
 % Entry Point
@@ -59,9 +62,9 @@ main :-
     format("~`=t~65|~n"),
     format("Default Logic Extension-Enumeration Experiment~n"),
     format("~`=t~65|~n~n"),
-    mc_runs(MC), max_perms(MP),
-    format("Monte Carlo runs per n (Strategy A) : ~w~n", [MC]),
-    format("Max permutations cap per A-trial    : ~w~n~n", [MP]),
+    mc_runs(MC), max_trials(MT),
+    format("Monte Carlo runs per n (each strategy) : ~w~n", [MC]),
+    format("Max randomized constructions per trial : ~w~n~n", [MT]),
     n_values(Ns),
     maplist(run_experiment_for_n, Ns),
     format("~`=t~65|~n"),
@@ -71,30 +74,41 @@ run_experiment_for_n(N) :-
     k_for_n(N, K),
     NumExts is 1 << K,          % 2^K
     mc_runs(MCRuns),
-    max_perms(MaxPerms),
+    max_trials(MaxTrials),
     generate_theory(N, K, Rules),
     format("~`-t~65|~n"),
     format("n=~w  |  conflict_pairs=~w  |  extensions=~w~n",
            [N, K, NumExts]),
 
-    % --- Strategy B : deterministic, systematic ---
-    strategy_b_enumerate_all(Rules, K, FoundExtsB, BConstr, BChecks),
-    length(FoundExtsB, NumFoundB),
-    format("  [B] constructions=~w   total_checks=~w   found=~w/~w~n",
-           [BConstr, BChecks, NumFoundB, NumExts]),
+    % --- Strategy 0 : Reiter baseline (random Xi) ---
+    run_mc_strategy_0(Rules, K, NumExts, MaxTrials, MCRuns,
+             SumTr0, SumChk0, Hit0),
+    AvgTr0  is SumTr0  / MCRuns,
+    AvgChk0 is SumChk0 / MCRuns,
+    format("  [0] avg_trials=~1f   avg_checks=~1f   cap_hits=~w/~w~n",
+        [AvgTr0, AvgChk0, Hit0, MCRuns]),
 
-    % --- Strategy A : random permutations, MC average ---
-    run_mc_strategy_a(Rules, NumExts, MaxPerms, MCRuns,
-                      SumPerms, SumChecks, HitCount),
-    AvgPerms  is SumPerms  / MCRuns,
-    AvgChecks is SumChecks / MCRuns,
-    format("  [A] avg_perms=~1f   avg_checks=~1f   cap_hits=~w/~w~n",
-           [AvgPerms, AvgChecks, HitCount, MCRuns]),
+    % --- Strategy A : Makinson priority re-check of skipped rules ---
+    run_mc_strategy_a(Rules, NumExts, MaxTrials, MCRuns,
+             SumTrA, SumChkA, HitA),
+    AvgTrA  is SumTrA  / MCRuns,
+    AvgChkA is SumChkA / MCRuns,
+    format("  [A] avg_trials=~1f   avg_checks=~1f   cap_hits=~w/~w~n",
+        [AvgTrA, AvgChkA, HitA, MCRuns]),
 
-    % --- Ratio ---
-    (BChecks > 0 ->
-        Ratio is AvgChecks / BChecks,
-        format("  ratio A_checks/B_checks=~2f~n~n", [Ratio])
+    % --- Strategy B : Makinson FIFO queue ---
+    run_mc_strategy_b(Rules, NumExts, MaxTrials, MCRuns,
+             SumTrB, SumChkB, HitB),
+    AvgTrB  is SumTrB  / MCRuns,
+    AvgChkB is SumChkB / MCRuns,
+    format("  [B] avg_trials=~1f   avg_checks=~1f   cap_hits=~w/~w~n",
+        [AvgTrB, AvgChkB, HitB, MCRuns]),
+
+    (AvgChk0 > 0 ->
+     RatioA0 is AvgChkA / AvgChk0,
+     RatioB0 is AvgChkB / AvgChk0,
+     format("  ratio A_checks/0_checks=~2f   B_checks/0_checks=~2f~n~n",
+         [RatioA0, RatioB0])
     ;   nl).
 
 % ============================================================
@@ -145,125 +159,217 @@ applicable(rule(Pre, Just, _), S) :-
     \+ (member(J, Just), memberchk(J, S)).
 
 % ============================================================
-% Strategy A : Permutation-based / Single Scan
+% Strategy 0 : Reiter baseline with random Xi
 % ============================================================
 
-%% strategy_a_scan(+Rules, -Extension, -Checks)
-%  Scan Rules exactly once in the given order.
-%  Apply each rule if applicable; skip it otherwise.
-%  The scan is deterministic: cut suppresses Prolog backtracking.
+%% strategy_0_reiter_once(+Rules, +K, -Extension, -Checks)
+%  Randomly sample one Xi seed, then run Reiter fixpoint closure.
 
-strategy_a_scan(Rules, Extension, Checks) :-
-    strategy_a_scan_(Rules, [], 0, ExtUnsorted, Checks),
+strategy_0_reiter_once(Rules, K, Extension, Checks) :-
+    NumExts is 1 << K,
+    MaxIdx is NumExts - 1,
+    random_between(0, MaxIdx, XiIdx),
+    idx_to_init(K, XiIdx, InitS),
+    reiter_fixpoint(Rules, InitS, Extension, Checks).
+
+%% reiter_fixpoint(+Rules, +InitS, -Extension, -Checks)
+%  Reiter-style deterministic closure: full rescan with restart at rule 1
+%  whenever IN grows.
+
+reiter_fixpoint(Rules, InitS, Extension, Checks) :-
+    reiter_fixpoint_(Rules, Rules, InitS, 0, ExtUnsorted, Checks),
     msort(ExtUnsorted, Extension).
 
-strategy_a_scan_([], S, C, S, C) :- !.
-strategy_a_scan_([R | Rest], S, C0, SF, CF) :-
+reiter_fixpoint_(_, [], S, C, S, C) :- !.
+reiter_fixpoint_(All, [R | Rest], S, C0, SF, CF) :-
     C1 is C0 + 1,
     (   applicable(R, S),
         R = rule(_, _, Conc),
         \+ memberchk(Conc, S)
-    ->  S1 = [Conc | S]         % rule fires; add conclusion
-    ;   S1 = S                  % rule skipped; never revisited
-    ), !,
-    strategy_a_scan_(Rest, S1, C1, SF, CF).
+    ->  reiter_fixpoint_(All, All, [Conc | S], C1, SF, CF)
+    ;   reiter_fixpoint_(All, Rest, S, C1, SF, CF)
+    ), !.
 
-%% strategy_a_find_all(+Rules, +TargetNum, +MaxPerms,
-%%                     -AllExts, -TotalPerms, -TotalChecks, -HitCap)
-%  Draw random permutations until TargetNum distinct extensions are
-%  found or MaxPerms permutations have been exhausted.
-%  HitCap = yes if the cap was reached before finishing.
+%% strategy_0_find_all(+Rules, +K, +TargetNum, +MaxTrials,
+%%                     -AllExts, -Trials, -Checks, -HitCap)
 
-strategy_a_find_all(Rules, TargetNum, MaxPerms,
-                    AllExts, TotalPerms, TotalChecks, HitCap) :-
-    strategy_a_loop(Rules, TargetNum, MaxPerms, [], 0, 0,
-                    AllExts, TotalPerms, TotalChecks, HitCap).
+strategy_0_find_all(Rules, K, TargetNum, MaxTrials,
+                    AllExts, Trials, Checks, HitCap) :-
+    strategy_0_loop(Rules, K, TargetNum, MaxTrials, [], 0, 0,
+                    AllExts, Trials, Checks, HitCap).
 
-strategy_a_loop(_, Tgt, _, Found, P, C, Found, P, C, no) :-
+strategy_0_loop(_, _, Tgt, _, Found, T, C, Found, T, C, no) :-
     length(Found, L), L >= Tgt, !.
-strategy_a_loop(_, _, MaxP, Found, P, C, Found, P, C, yes) :-
-    P >= MaxP, !.
-strategy_a_loop(Rules, Tgt, MaxP, Found, P0, C0, AF, TP, TC, HC) :-
-    random_permutation(Rules, Perm),
-    strategy_a_scan(Perm, Ext, ScanC),
-    P1 is P0 + 1,
-    C1 is C0 + ScanC,
+strategy_0_loop(_, _, _, MaxT, Found, T, C, Found, T, C, yes) :-
+    T >= MaxT, !.
+strategy_0_loop(Rules, K, Tgt, MaxT, Found, T0, C0, AF, TT, TC, HC) :-
+    strategy_0_reiter_once(Rules, K, Ext, ThisC),
+    T1 is T0 + 1,
+    C1 is C0 + ThisC,
     (memberchk(Ext, Found) -> F1 = Found ; F1 = [Ext | Found]),
-    strategy_a_loop(Rules, Tgt, MaxP, F1, P1, C1, AF, TP, TC, HC).
+    strategy_0_loop(Rules, K, Tgt, MaxT, F1, T1, C1, AF, TT, TC, HC).
 
-%% run_mc_strategy_a(+Rules, +NumExts, +MaxPerms, +MCRuns,
-%%                   -SumPerms, -SumChecks, -TotalHits)
-%  Run MCRuns independent trials, each seeded differently.
-%  Accumulate total permutations and checks across all trials.
+run_mc_strategy_0(Rules, K, NumExts, MaxTrials, MCRuns,
+                  SumTrials, SumChecks, TotHit) :-
+    run_mc_strategy_0_(Rules, K, NumExts, MaxTrials, MCRuns, 1,
+                       0, 0, 0, SumTrials, SumChecks, TotHit).
 
-run_mc_strategy_a(Rules, NumExts, MaxPerms, MCRuns,
-                  SumPerms, SumChecks, TotHit) :-
-    run_mc_(Rules, NumExts, MaxPerms, MCRuns, 1,
-            0, 0, 0, SumPerms, SumChecks, TotHit).
-
-run_mc_(_, _, _, 0, _, SP, SC, SH, SP, SC, SH) :- !.
-run_mc_(Rules, NumExts, MaxP, Rem, Seed,
-        SP0, SC0, SH0, SP, SC, SH) :-
+run_mc_strategy_0_(_, _, _, _, 0, _, ST, SC, SH, ST, SC, SH) :- !.
+run_mc_strategy_0_(Rules, K, NumExts, MaxT, Rem, Seed,
+                   ST0, SC0, SH0, ST, SC, SH) :-
     set_random(seed(Seed)),
-    strategy_a_find_all(Rules, NumExts, MaxP, _, Perms, Checks, Hit),
-    SP1 is SP0 + Perms,
+    strategy_0_find_all(Rules, K, NumExts, MaxT, _, Trials, Checks, Hit),
+    ST1 is ST0 + Trials,
     SC1 is SC0 + Checks,
     (Hit = yes -> SH1 is SH0 + 1 ; SH1 = SH0),
     Seed1 is Seed + 1,
     Rem1  is Rem  - 1,
-    run_mc_(Rules, NumExts, MaxP, Rem1, Seed1, SP1, SC1, SH1, SP, SC, SH).
+    run_mc_strategy_0_(Rules, K, NumExts, MaxT, Rem1, Seed1,
+                       ST1, SC1, SH1, ST, SC, SH).
 
 % ============================================================
-% Strategy B : Fixpoint / Full Rescan
+% Strategy A : Makinson with priority queue for skipped rules
 % ============================================================
 
-%% strategy_b_fp(+Rules, +InitS, -Extension, -Checks)
-%  Deterministic fixpoint computation starting from InitS.
-%  Scans All rules in order; when a rule fires (adds a new atom),
-%  immediately restart from rule 1 (no Prolog backtracking; cut used).
+%% strategy_a_makinson_once(+PermutedRules, -Extension, -Checks)
+%  Priority behavior for skipped rules:
+%  - skipped rules are stored in insertion order (oldest first)
+%  - after any IN update, skipped rules are revisited before newer rules
 
-strategy_b_fp(Rules, InitS, Extension, Checks) :-
-    strategy_b_fp_(Rules, Rules, InitS, 0, ExtUnsorted, Checks),
+strategy_a_makinson_once(PermRules, Extension, Checks) :-
+    strategy_a_makinson_loop(PermRules, [], [], false, 0, ExtUnsorted, Checks),
     msort(ExtUnsorted, Extension).
 
-%% strategy_b_fp_(+AllRules, +ToScan, +S, +C0, -SF, -CF)
-%  AllRules  : full rule list (used to restart)
-%  ToScan    : remaining rules in current pass
+%% strategy_a_makinson_loop(+Queue, +Skipped, +S, +Progress, +C0, -SF, -CF)
+%  Queue    : current processing queue
+%  Skipped  : skipped rules waiting in priority order (oldest at head)
+%  Progress : true if IN changed in the current queue cycle
 
-strategy_b_fp_(_, [], S, C, S, C) :- !.    % Finished pass without change = fixpoint
-strategy_b_fp_(All, [R | Rest], S, C0, SF, CF) :-
+strategy_a_makinson_loop([], [], S, _, C, S, C) :- !.
+strategy_a_makinson_loop([], Skipped, S, true, C0, SF, CF) :-
+    % IN changed in this cycle: give skipped rules another chance.
+    !,
+    strategy_a_makinson_loop(Skipped, [], S, false, C0, SF, CF).
+strategy_a_makinson_loop([], _Skipped, S, false, C, S, C) :- !.
+strategy_a_makinson_loop([R | Rest], Skipped, S, Progress0, C0, SF, CF) :-
     C1 is C0 + 1,
     (   applicable(R, S),
         R = rule(_, _, Conc),
         \+ memberchk(Conc, S)
-    ->  % New atom added: restart from rule 1
-        strategy_b_fp_(All, All, [Conc | S], C1, SF, CF)
-    ;   % Rule not fired: continue scan
-        strategy_b_fp_(All, Rest, S, C1, SF, CF)
+    ->  % IN update: revisit skipped rules immediately (oldest first).
+        append(Skipped, Rest, Queue1),
+        strategy_a_makinson_loop(Queue1, [], [Conc | S], true, C1, SF, CF)
+    ;   % Rule did not fire now: keep age order in skipped priority queue.
+        append(Skipped, [R], Skipped1),
+        strategy_a_makinson_loop(Rest, Skipped1, S, Progress0, C1, SF, CF)
     ), !.
 
-%% strategy_b_enumerate_all(+Rules, +K,
-%%                          -AllExts, -TotalConstr, -TotalChecks)
-%  Enumerate all 2^K extensions systematically.
-%  For conflict pair I, bit (I-1) of the combo index chooses pos_I (0)
-%  or neg_I (1) as the seed atom.  Running one fixpoint per combo
-%  and deduplicating with memberchk/2 + msort/2.
+strategy_a_find_all(Rules, TargetNum, MaxTrials,
+                    AllExts, Trials, Checks, HitCap) :-
+    strategy_a_loop(Rules, TargetNum, MaxTrials, [], 0, 0,
+                    AllExts, Trials, Checks, HitCap).
 
-strategy_b_enumerate_all(Rules, K, AllExts, TotalConstr, TotalChecks) :-
-    NumCombos is 1 << K,
-    Last is NumCombos - 1,
-    numlist(0, Last, Idxs),
-    maplist(idx_to_init(K), Idxs, InitSets),
-    run_b_for_all(Rules, InitSets, [], 0, 0,
-                  AllExts, TotalConstr, TotalChecks).
-
-run_b_for_all(_, [], Found, C, Ch, Found, C, Ch) :- !.
-run_b_for_all(Rules, [Init | Rest], Found, C0, Ch0, AF, TC, TCh) :-
-    strategy_b_fp(Rules, Init, Ext, ThisCh),
-    C1  is C0  + 1,
-    Ch1 is Ch0 + ThisCh,
+strategy_a_loop(_, Tgt, _, Found, T, C, Found, T, C, no) :-
+    length(Found, L), L >= Tgt, !.
+strategy_a_loop(_, _, MaxT, Found, T, C, Found, T, C, yes) :-
+    T >= MaxT, !.
+strategy_a_loop(Rules, Tgt, MaxT, Found, T0, C0, AF, TT, TC, HC) :-
+    random_permutation(Rules, Perm),
+    strategy_a_makinson_once(Perm, Ext, ThisC),
+    T1 is T0 + 1,
+    C1 is C0 + ThisC,
     (memberchk(Ext, Found) -> F1 = Found ; F1 = [Ext | Found]),
-    run_b_for_all(Rules, Rest, F1, C1, Ch1, AF, TC, TCh).
+    strategy_a_loop(Rules, Tgt, MaxT, F1, T1, C1, AF, TT, TC, HC).
+
+run_mc_strategy_a(Rules, NumExts, MaxTrials, MCRuns,
+                  SumTrials, SumChecks, TotHit) :-
+    run_mc_strategy_a_(Rules, NumExts, MaxTrials, MCRuns, 1,
+                       0, 0, 0, SumTrials, SumChecks, TotHit).
+
+run_mc_strategy_a_(_, _, _, 0, _, ST, SC, SH, ST, SC, SH) :- !.
+run_mc_strategy_a_(Rules, NumExts, MaxT, Rem, Seed,
+                   ST0, SC0, SH0, ST, SC, SH) :-
+    set_random(seed(Seed)),
+    strategy_a_find_all(Rules, NumExts, MaxT, _, Trials, Checks, Hit),
+    ST1 is ST0 + Trials,
+    SC1 is SC0 + Checks,
+    (Hit = yes -> SH1 is SH0 + 1 ; SH1 = SH0),
+    Seed1 is Seed + 1,
+    Rem1  is Rem  - 1,
+    run_mc_strategy_a_(Rules, NumExts, MaxT, Rem1, Seed1,
+                       ST1, SC1, SH1, ST, SC, SH).
+
+% ============================================================
+% Strategy B : Makinson with FIFO queue for skipped rules
+% ============================================================
+
+%% strategy_b_makinson_once(+PermutedRules, -Extension, -Checks)
+%  FIFO behavior for skipped rules:
+%  - skipped rule goes to tail
+%  - full no-progress round implies closure (cannot get stuck)
+
+strategy_b_makinson_once(PermRules, Extension, Checks) :-
+    strategy_b_makinson_loop(PermRules, [], 0, 0, ExtUnsorted, Checks),
+    msort(ExtUnsorted, Extension).
+
+%% strategy_b_makinson_loop(+Queue, +S, +NoFire, +C0, -SF, -CF)
+%  NoFire counts consecutive processed queue elements with no IN update.
+%  If NoFire reaches queue length, a full no-progress round is complete.
+
+strategy_b_makinson_loop([], S, _, C, S, C) :- !.
+strategy_b_makinson_loop([R | Rest], S, NoFire0, C0, SF, CF) :-
+    C1 is C0 + 1,
+    (   applicable(R, S),
+        R = rule(_, _, Conc),
+        \+ memberchk(Conc, S)
+    ->  % Rule fired: IN changed, so reset no-progress counter.
+        strategy_b_makinson_loop(Rest, [Conc | S], 0, C1, SF, CF)
+    ;   % Rule did not fire now: move it to queue tail.
+        append(Rest, [R], Queue1),
+        NoFire1 is NoFire0 + 1,
+        length(Queue1, QSize),
+        (NoFire1 >= QSize
+        ->  % One full round without any fire => closed.
+            SF = S,
+            CF = C1
+        ;   strategy_b_makinson_loop(Queue1, S, NoFire1, C1, SF, CF)
+        )
+    ), !.
+
+strategy_b_find_all(Rules, TargetNum, MaxTrials,
+                    AllExts, Trials, Checks, HitCap) :-
+    strategy_b_loop(Rules, TargetNum, MaxTrials, [], 0, 0,
+                    AllExts, Trials, Checks, HitCap).
+
+strategy_b_loop(_, Tgt, _, Found, T, C, Found, T, C, no) :-
+    length(Found, L), L >= Tgt, !.
+strategy_b_loop(_, _, MaxT, Found, T, C, Found, T, C, yes) :-
+    T >= MaxT, !.
+strategy_b_loop(Rules, Tgt, MaxT, Found, T0, C0, AF, TT, TC, HC) :-
+    random_permutation(Rules, Perm),
+    strategy_b_makinson_once(Perm, Ext, ThisC),
+    T1 is T0 + 1,
+    C1 is C0 + ThisC,
+    (memberchk(Ext, Found) -> F1 = Found ; F1 = [Ext | Found]),
+    strategy_b_loop(Rules, Tgt, MaxT, F1, T1, C1, AF, TT, TC, HC).
+
+run_mc_strategy_b(Rules, NumExts, MaxTrials, MCRuns,
+                  SumTrials, SumChecks, TotHit) :-
+    run_mc_strategy_b_(Rules, NumExts, MaxTrials, MCRuns, 1,
+                       0, 0, 0, SumTrials, SumChecks, TotHit).
+
+run_mc_strategy_b_(_, _, _, 0, _, ST, SC, SH, ST, SC, SH) :- !.
+run_mc_strategy_b_(Rules, NumExts, MaxT, Rem, Seed,
+                   ST0, SC0, SH0, ST, SC, SH) :-
+    set_random(seed(Seed)),
+    strategy_b_find_all(Rules, NumExts, MaxT, _, Trials, Checks, Hit),
+    ST1 is ST0 + Trials,
+    SC1 is SC0 + Checks,
+    (Hit = yes -> SH1 is SH0 + 1 ; SH1 = SH0),
+    Seed1 is Seed + 1,
+    Rem1  is Rem  - 1,
+    run_mc_strategy_b_(Rules, NumExts, MaxT, Rem1, Seed1,
+                       ST1, SC1, SH1, ST, SC, SH).
 
 %% idx_to_init(+K, +Idx, -InitSet)
 %  Convert a combo index (0 .. 2^K - 1) to an initial belief set.

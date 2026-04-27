@@ -14,8 +14,16 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-echo "Pulling latest remote image from GHCR..."
-docker compose -f "${COMPOSE_FILE}" pull
+update_to_newest_images() {
+    echo "Trying to refresh images from remote registry..."
+    if docker compose -f "${COMPOSE_FILE}" pull; then
+        echo "Image refresh succeeded."
+    else
+        echo "Image refresh failed. Continuing with local cached image." >&2
+    fi
+}
+
+update_to_newest_images
 
 echo "Running experiment container..."
 docker compose -f "${COMPOSE_FILE}" run --rm experiment

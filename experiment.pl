@@ -2,10 +2,10 @@
 %%% Reproducible Monte Carlo experiment comparing two default-logic
 %%% extension-enumeration strategies.
 %%%
-%%% Strategy 0  Reiter baseline (random Xi)
-%%%   - Repeatedly draw a random Xi seed (conflict resolution choice).
-%%%   - Run deterministic Reiter-style fixpoint closure from that Xi.
-%%%   - Keep sampling until all extensions are discovered (or cap).
+%%% Strategy 0  Reiter baseline (deterministic Xi sweep)
+%%%   - Enumerate Xi seeds in binary order: 000...0, 000...1, ... 111...1.
+%%%   - Run deterministic Reiter-style fixpoint closure for each Xi exactly once.
+%%%   - Stop after all Xi are covered (or cap).
 %%%
 %%% Strategy A  Makinson with priority queue for skipped rules
 %%%   - Draw a random rule sequence.
@@ -31,7 +31,7 @@
 
 %% n_values(?Ns)
 %  List of total rule-counts to sweep over.
-n_values([8, 10, 12, 14, 16, 18, 20]).
+n_values([4, 6, 8]).
 
 %% k_for_n(+N, -K)
 %  K conflict pairs for a theory of size N.
@@ -63,8 +63,9 @@ main :-
     format("Default Logic Extension-Enumeration Experiment~n"),
     format("~`=t~65|~n~n"),
     mc_runs(MC), max_trials(MT),
-    format("Monte Carlo runs per n (each strategy) : ~w~n", [MC]),
-    format("Max randomized constructions per trial : ~w~n~n", [MT]),
+    format("Monte Carlo runs per n (A/B only)      : ~w~n", [MC]),
+    format("Strategy 0 Xi order                    : 0..(2^k-1)~n"),
+    format("Max constructions per strategy run     : ~w~n~n", [MT]),
     n_values(Ns),
     maplist(run_experiment_for_n, Ns),
     format("~`=t~65|~n"),
@@ -80,7 +81,7 @@ run_experiment_for_n(N) :-
     format("n=~w  |  conflict_pairs=~w  |  extensions=~w~n",
            [N, K, NumExts]),
 
-    % --- Strategy 0 : Reiter baseline (random Xi) ---
+    % --- Strategy 0 : Reiter baseline (deterministic Xi sweep) ---
     run_mc_strategy_0(Rules, K, NumExts, MaxTrials, MCRuns,
              SumTr0, SumChk0, Hit0),
     AvgTr0  is SumTr0  / MCRuns,
@@ -210,16 +211,13 @@ applicable(rule(Pre, Just, _), S) :-
     \+ (member(J, Just), memberchk(J, S)).
 
 % ============================================================
-% Strategy 0 : Reiter baseline with random Xi
+% Strategy 0 : Reiter baseline with deterministic Xi sweep
 % ============================================================
 
-%% strategy_0_reiter_once(+Rules, +K, -Extension, -Checks)
-%  Randomly sample one Xi seed, then run Reiter fixpoint closure.
+%% strategy_0_reiter_once(+Rules, +K, +XiIdx, -Extension, -Checks)
+%  Run Reiter fixpoint closure from a specific Xi index.
 
-strategy_0_reiter_once(Rules, K, Extension, Checks) :-
-    NumExts is 1 << K,
-    MaxIdx is NumExts - 1,
-    random_between(0, MaxIdx, XiIdx),
+strategy_0_reiter_once(Rules, K, XiIdx, Extension, Checks) :-
     idx_to_init(K, XiIdx, InitS),
     reiter_fixpoint(Rules, InitS, Extension, Checks).
 
@@ -241,42 +239,30 @@ reiter_fixpoint_(All, [R | Rest], S, C0, SF, CF) :-
     ;   reiter_fixpoint_(All, Rest, S, C1, SF, CF)
     ), !.
 
-%% strategy_0_find_all(+Rules, +K, +TargetNum, +MaxTrials,
-%%                     -AllExts, -Trials, -Checks, -HitCap)
+%% strategy_0_sweep_xi(+Rules, +K, +MaxTrials, -Trials, -Checks, -HitCap)
+%  Enumerate Xi deterministically: 0,1,2,...,(2^K-1) without replacement.
 
-strategy_0_find_all(Rules, K, TargetNum, MaxTrials,
-                    AllExts, Trials, Checks, HitCap) :-
-    strategy_0_loop(Rules, K, TargetNum, MaxTrials, [], 0, 0,
-                    AllExts, Trials, Checks, HitCap).
+strategy_0_sweep_xi(Rules, K, MaxTrials, Trials, Checks, HitCap) :-
+    TotalXi is 1 << K,
+    Trials is min(MaxTrials, TotalXi),
+    strategy_0_sweep_loop(Rules, K, 0, Trials, 0, Checks),
+    (MaxTrials < TotalXi -> HitCap = yes ; HitCap = no).
 
-strategy_0_loop(_, _, Tgt, _, Found, T, C, Found, T, C, no) :-
-    length(Found, L), L >= Tgt, !.
-strategy_0_loop(_, _, _, MaxT, Found, T, C, Found, T, C, yes) :-
-    T >= MaxT, !.
-strategy_0_loop(Rules, K, Tgt, MaxT, Found, T0, C0, AF, TT, TC, HC) :-
-    strategy_0_reiter_once(Rules, K, Ext, ThisC),
-    T1 is T0 + 1,
+strategy_0_sweep_loop(_, _, XiIdx, Trials, C, C) :-
+    XiIdx >= Trials,
+    !.
+strategy_0_sweep_loop(Rules, K, XiIdx, Trials, C0, CF) :-
+    strategy_0_reiter_once(Rules, K, XiIdx, _Ext, ThisC),
     C1 is C0 + ThisC,
-    (memberchk(Ext, Found) -> F1 = Found ; F1 = [Ext | Found]),
-    strategy_0_loop(Rules, K, Tgt, MaxT, F1, T1, C1, AF, TT, TC, HC).
+    XiNext is XiIdx + 1,
+    strategy_0_sweep_loop(Rules, K, XiNext, Trials, C1, CF).
 
-run_mc_strategy_0(Rules, K, NumExts, MaxTrials, MCRuns,
+run_mc_strategy_0(Rules, K, _NumExts, MaxTrials, MCRuns,
                   SumTrials, SumChecks, TotHit) :-
-    run_mc_strategy_0_(Rules, K, NumExts, MaxTrials, MCRuns, 1,
-                       0, 0, 0, SumTrials, SumChecks, TotHit).
-
-run_mc_strategy_0_(_, _, _, _, 0, _, ST, SC, SH, ST, SC, SH) :- !.
-run_mc_strategy_0_(Rules, K, NumExts, MaxT, Rem, Seed,
-                   ST0, SC0, SH0, ST, SC, SH) :-
-    set_random(seed(Seed)),
-    strategy_0_find_all(Rules, K, NumExts, MaxT, _, Trials, Checks, Hit),
-    ST1 is ST0 + Trials,
-    SC1 is SC0 + Checks,
-    (Hit = yes -> SH1 is SH0 + 1 ; SH1 = SH0),
-    Seed1 is Seed + 1,
-    Rem1  is Rem  - 1,
-    run_mc_strategy_0_(Rules, K, NumExts, MaxT, Rem1, Seed1,
-                       ST1, SC1, SH1, ST, SC, SH).
+    strategy_0_sweep_xi(Rules, K, MaxTrials, TrialsOneRun, ChecksOneRun, Hit),
+    SumTrials is TrialsOneRun * MCRuns,
+    SumChecks is ChecksOneRun * MCRuns,
+    (Hit = yes -> TotHit = MCRuns ; TotHit = 0).
 
 % ============================================================
 % Process tree for unique initial rule sequences (A/B)
@@ -535,7 +521,7 @@ run_mc_strategy_a_(Rules, MaxT, Rem, Seed,
 %% strategy_b_makinson_once(+PermutedRules, -Extension, -Checks)
 %  FIFO behavior for skipped rules:
 %  - skipped rule goes to tail
-%  - full no-progress round implies closure (cannot get stuck)
+%  - full no-progress rounnd implies closure (cannot get stuck)
 
 strategy_b_makinson_once(PermRules, Extension, Checks) :-
     strategy_b_makinson_loop(PermRules, [], 0, 0, ExtUnsorted, Checks),

@@ -3,7 +3,8 @@
 Empirically compares three extension-construction schedules for propositional
 default theories, implemented in SWI-Prolog.
 
-- [Theory & Mathematical analysis](https://github.com/AIPEAC/Makinson-Default-Logics/blob/8d9d9b6feb22a51bc525050947fbded601146d27/README.md#L12)
+- [Theory & Background](https://github.com/AIPEAC/Makinson-Default-Logics/blob/8d9d9b6feb22a51bc525050947fbded601146d27/README.md#L12)
+- [Mathematical Analysis](https://github.com/AIPEAC/Makinson-Default-Logics/blob/8d9d9b6feb22a51bc525050947fbded601146d27/README.md#L85)
 - [Run the program yourself](https://github.com/AIPEAC/Makinson-Default-Logics/blob/8d9d9b6feb22a51bc525050947fbded601146d27/README.md#L157)
 
 
@@ -83,77 +84,60 @@ remaining order is equivalent and that subtree is closed.
 
 ### Analysis (mathematical summary)
 
-Let $K$ be the number of conflict pairs, $m=2^K$ the number of extensions, and $n$ the total number of rules.
+- Given: 
+  $$a = num(atoms)$$
+  $$r = |\Delta|$$
+  $$n = |\Phi|$$
+- Unknowns: 
+$$num(extensions)$$
 
-- Strategy 0 (deterministic Xi sweep): covers $m$ seeds exactly once, so the
-  number of constructions is $m$ (or the `max_trials` cap if smaller). If
-  $c_R(n)$ is the mean cost of one Reiter fixpoint closure on a theory of size
-  $n$, then
 
-$$
-T_0(n, K) = 2^K \cdot c_R(n).
-$$
+**Strategy 0 (deterministic Xi sweep, Reiter):** 
 
-  This is exact for the full sweep, up to the cap.
+- Average cost:
+$$T_{avg​}(r,n,a)=2^r(n+\frac{r}{2})+r2^r⋅T_{SAT}​(n+r,a)$$
 
-- Strategy A (permutation single-scan, conventional agenda-style): both A and B
-  explore the space of $n!$ possible rule orderings (permutations). Each
-  permutation is a potential construction that may yield one or more of the $m$
-  distinct extensions. When randomly sampling permutations from the $n!$ space
-  to cover all $m$ extensions, the classical coupon-collector model applies: the
-  expected number of random permutation trials needed is $m \cdot H_m$, where
-  $H_m = \sum_{i=1}^m \frac{1}{i}$ is the $m$-th harmonic number. If $c_A(n)$ is
-  the mean cost per permutation construction in A, then
+**Strategy A (permutation single-scan, Makinson agenda-style):**
 
-$$
-T_A(n, K) = c_A(n) \cdot m \cdot H_m = c_A(n) \cdot 2^K \cdot H_{2^K}.
-$$
-
-  Using the standard expansion $H_m = \ln(m) + \gamma + O(1/m)$, we have
+A and B explore the $r!$ permutation space. To discover all $m$ distinct
+extensions by random sampling, the coupon-collector model says we need
+$m \cdot H_m$ expected random permutation draws. For each permutation, process
+the $r$ rules in order: check applicability ($O(1)$ per rule) and handle skipped
+rules using a **priority queue** (manage revisits with $O(\log r)$ per operation).
+One permutation construction is $O(r \log r)$ due to queue overhead. Total cost:
 
 $$
-T_A(n, K) = c_A(n) \cdot 2^K \cdot (\ln(2^K) + \gamma + o(1)) \approx c_A(n) \cdot 2^K \cdot (\ln 2 \cdot K + \gamma).
+T_A = r \log r \cdot m \cdot H_m.
 $$
 
-  The key point: $c_A(n)$ is the cost per permutation sampled. A high constant
-  cost per permutation makes the total expensive even without the coupon-collector
-  overhead.
+**Strategy B (FIFO skipped-queue, Makinson FIFO):**
 
-- Strategy B (FIFO skipped-queue): like A it samples from the $n!$ permutation
-  space and thus also pays coupon-collector costs $m \cdot H_m$. If $c_B(n)$ is
-  the mean cost per permutation construction in B, then
-
-$$
-T_B(n, K) = c_B(n) \cdot m \cdot H_m = c_B(n) \cdot 2^K \cdot H_{2^K}.
-$$
-
-  The difference from A is **the per-permutation constant**: FIFO avoids the extra
-  priority-list maintenance that A requires, and the semantic tree cutoff prevents
-  A from exploring redundant permutation prefixes. These reduce the constant:
-  measured empirically, $c_B(n) < c_A(n)$.
-
-Comparative intuition:
-
-- A (conventional agenda/permutation sampling) is equivalent to many
-  production-system/agenda conflict-resolution strategies (see Forgy, OPS5/Rete
-  literature) where rule execution order dominates performance. Both A and B
-  pay the cost of exploring $n!$ permutations trying to hit all $m = 2^K$
-  distinct extensions; this costs coupon-collector time $m \cdot H_m$. A's total
-  cost is thus $c_A(n) \cdot 2^K \cdot H_{2^K}$.
-
-- B gains from FIFO queueing discipline and permutation-tree semantic cutoff.
-  The semantic cutoff skips exploring permutation suffixes once a prefix has
-  already decided every conflict-pair, collapsing many equivalent permutations.
-  This lowers the cost per permutation construction: $c_B(n) < c_A(n)$.
-
-- The direct mathematical comparison is:
+Like A, also pays the coupon-collector cost $m \cdot H_m$ to explore permutations.
+But uses a **FIFO queue** instead of priority queue: O(1) per operation instead of
+$O(\log r)$. Semantic tree cutoff prunes equivalent permutation prefixes, further
+reducing redundant exploration. One permutation construction is $O(r)$ (linear
+scan with simple queue). Total cost:
 
 $$
-T_B(n, K) - T_A(n, K) = (c_B(n) - c_A(n)) \cdot 2^K \cdot H_{2^K}.
+T_B = r \cdot m \cdot H_m.
 $$
 
-  Since $c_B(n) < c_A(n)$, this difference is negative, showing why B is faster
-  than A for the same coupon-collector factor.
+**Comparison:**
+
+$$
+T_A - T_B = r \log r \cdot m \cdot H_m - r \cdot m \cdot H_m = (r \log r - r) \cdot m \cdot H_m = r(\log r - 1) \cdot m \cdot H_m.
+$$
+
+For $r > 2$, we have $\log r > 1$, so $T_A > T_B$: **B is faster than A by a factor
+of $\log r$**. Both pay the unavoidable coupon-collector overhead $m \cdot H_m$
+(inherent to random sampling from $r!$), but B avoids the priority queue management
+cost that A incurs.
+
+**Summary:**
+
+- **Strategy 0:** $T_0 = m \cdot r \cdot a$ — deterministic, exact, no sampling overhead.
+- **Strategy A:** $T_A = r \log r \cdot m \cdot H_m$ — random permutation sampling with priority queue.
+- **Strategy B:** $T_B = r \cdot m \cdot H_m$ — random permutation sampling with FIFO queue, $\log r$ times faster than A.
 
 Practical takeaway: if you want exact one-shot coverage of all Xi without
 sampling overhead, use Strategy 0 (deterministic enumeration). If you must

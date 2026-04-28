@@ -83,7 +83,7 @@ remaining order is equivalent and that subtree is closed.
 
 ### Analysis (mathematical summary)
 
-Let $K$ be the number of conflict pairs and $m=2^K$ the number of extensions.
+Let $K$ be the number of conflict pairs, $m=2^K$ the number of extensions, and $n$ the total number of rules.
 
 - Strategy 0 (deterministic Xi sweep): covers $m$ seeds exactly once, so the
   number of constructions is $m$ (or the `max_trials` cap if smaller). If
@@ -96,55 +96,64 @@ $$
 
   This is exact for the full sweep, up to the cap.
 
-- Strategy A (permutation single-scan, conventional agenda-style): when
-  implemented as random permutations the classical coupon-collector model
-  applies. If $c_A(n)$ is the mean cost of one permutation-driven construction,
-  then the expected total time is
+- Strategy A (permutation single-scan, conventional agenda-style): both A and B
+  explore the space of $n!$ possible rule orderings (permutations). Each
+  permutation is a potential construction that may yield one or more of the $m$
+  distinct extensions. When randomly sampling permutations from the $n!$ space
+  to cover all $m$ extensions, the classical coupon-collector model applies: the
+  expected number of random permutation trials needed is $m \cdot H_m$, where
+  $H_m = \sum_{i=1}^m \frac{1}{i}$ is the $m$-th harmonic number. If $c_A(n)$ is
+  the mean cost per permutation construction in A, then
 
 $$
-T_A(n, K) = c_A(n) \cdot 2^K \cdot H_{2^K}.
+T_A(n, K) = c_A(n) \cdot m \cdot H_m = c_A(n) \cdot 2^K \cdot H_{2^K}.
 $$
 
-  where $H_m = \sum_{i=1}^m \frac{1}{i}$ is the $m$th harmonic number. Using
-  the standard expansion,
+  Using the standard expansion $H_m = \ln(m) + \gamma + O(1/m)$, we have
 
 $$
-T_A(n, K) = c_A(n) \cdot 2^K \cdot (\ln(2^K) + \gamma) + o(2^K),
+T_A(n, K) = c_A(n) \cdot 2^K \cdot (\ln(2^K) + \gamma + o(1)) \approx c_A(n) \cdot 2^K \cdot (\ln 2 \cdot K + \gamma).
 $$
 
-  so the constant factor $c_A(n)$ is visible in the runtime itself. This is why
-  random-resample A needs noticeably more work than an exact sweep.
+  The key point: $c_A(n)$ is the cost per permutation sampled. A high constant
+  cost per permutation makes the total expensive even without the coupon-collector
+  overhead.
 
-- Strategy B (FIFO skipped-queue): like A it explores the permutation tree,
-  but its FIFO policy plus the semantic tree cutoff reduce repeated scans. If
-  $c_B(n)$ is the mean cost of one FIFO construction, then
+- Strategy B (FIFO skipped-queue): like A it samples from the $n!$ permutation
+  space and thus also pays coupon-collector costs $m \cdot H_m$. If $c_B(n)$ is
+  the mean cost per permutation construction in B, then
 
 $$
-T_B(n, K) = c_B(n) \cdot 2^K \cdot H_{2^K}.
+T_B(n, K) = c_B(n) \cdot m \cdot H_m = c_B(n) \cdot 2^K \cdot H_{2^K}.
 $$
 
-  The difference from A is the per-construction constant. FIFO avoids the extra
-  priority-list maintenance and tends to revisit fewer stale candidates, so in
-  this family we measure $c_B(n) < c_A(n)$.
+  The difference from A is **the per-permutation constant**: FIFO avoids the extra
+  priority-list maintenance that A requires, and the semantic tree cutoff prevents
+  A from exploring redundant permutation prefixes. These reduce the constant:
+  measured empirically, $c_B(n) < c_A(n)$.
 
 Comparative intuition:
 
 - A (conventional agenda/permutation sampling) is equivalent to many
   production-system/agenda conflict-resolution strategies (see Forgy, OPS5/Rete
-  literature) where conflict resolution order matters and can dominate
-  performance. Its total runtime is the larger constant $c_A(n)$ multiplied by
-  the same coupon-collector factor $2^K H_{2^K}$.
-- B gains from queueing discipline and the permutation-tree semantic cutoff;
-  it therefore avoids many redundant full scans that A would revisit under
-  random sampling. In runtime terms,
+  literature) where rule execution order dominates performance. Both A and B
+  pay the cost of exploring $n!$ permutations trying to hit all $m = 2^K$
+  distinct extensions; this costs coupon-collector time $m \cdot H_m$. A's total
+  cost is thus $c_A(n) \cdot 2^K \cdot H_{2^K}$.
+
+- B gains from FIFO queueing discipline and permutation-tree semantic cutoff.
+  The semantic cutoff skips exploring permutation suffixes once a prefix has
+  already decided every conflict-pair, collapsing many equivalent permutations.
+  This lowers the cost per permutation construction: $c_B(n) < c_A(n)$.
+
+- The direct mathematical comparison is:
 
 $$
-T_B(n, K) - T_A(n, K) = (c_B(n) - c_A(n)) \cdot 2^K \cdot H_{2^K},
+T_B(n, K) - T_A(n, K) = (c_B(n) - c_A(n)) \cdot 2^K \cdot H_{2^K}.
 $$
 
-  and since the measured constant satisfies $c_B(n) < c_A(n)$, the difference
-  is negative. That is the mathematical reason B is faster than A in this
-  family.
+  Since $c_B(n) < c_A(n)$, this difference is negative, showing why B is faster
+  than A for the same coupon-collector factor.
 
 Practical takeaway: if you want exact one-shot coverage of all Xi without
 sampling overhead, use Strategy 0 (deterministic enumeration). If you must

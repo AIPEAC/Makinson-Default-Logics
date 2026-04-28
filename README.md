@@ -1,32 +1,15 @@
 # Makinson Default Logics — Extension Enumeration Experiment
 
-
 Empirically compares three extension-construction schedules for propositional
 default theories, implemented in SWI-Prolog.
 
----
+- [Theory & Mathematical analysis](https://github.com/AIPEAC/Makinson-Default-Logics/blob/8d9d9b6feb22a51bc525050947fbded601146d27/README.md#L12)
+- [Run the program yourself](https://github.com/AIPEAC/Makinson-Default-Logics/blob/8d9d9b6feb22a51bc525050947fbded601146d27/README.md#L157)
 
-
-## Experimental Setup (short)
-
-We compare three deterministic construction schedules for propositional
-default theories that contain $k$ conflict pairs (giving $2^k$ extensions)
-plus independent rules. The strategies are:
-
-- Strategy 0: enumerate Xi seeds in binary order and run Reiter-style
-  fixpoint closure for each seed (no resampling).
-- Strategy A: permutation-driven single-scan schedule with a priority
-  skipped-queue (older skipped rules revisited first).
-- Strategy B: permutation-driven single-scan schedule with a FIFO skipped-queue
-  (skipped rules move to the tail; terminate on a full no-progress round).
-
-For A/B we maintain a process tree of prefix permutations and apply a
-semantic cutoff: when a prefix already decides every conflict-pair, the
-remaining order is equivalent and that subtree is closed.
 
 ---
 
-## Theory Model
+## Theory Model & Background
 
 Each default rule is represented as:
 
@@ -53,7 +36,7 @@ The generated theory contains:
 
 ---
 
-## Metrics Collected
+### Metrics Collected
 
 For each strategy and each `n`:
 
@@ -68,7 +51,7 @@ Ratios versus Strategy 0 are also printed:
 
 ---
 
-## Configuration
+### Configuration
 
 Edit the top of `experiment.pl`:
 
@@ -79,61 +62,23 @@ Edit the top of `experiment.pl`:
 | `mc_runs/1` | `10` | Number of repeated runs used to average each strategy |
 | `max_trials/1` | `200000` | Safety cap on constructions per strategy run |
 
----
 
-## Running the Experiment
+### Experimental Setup
 
-### Directly with SWI-Prolog
+We compare three deterministic construction schedules for propositional
+default theories that contain $k$ conflict pairs (giving $2^k$ extensions)
+plus independent rules. The strategies are:
 
-```bash
-swipl -s experiment.pl
-```
+- Strategy 0: enumerate Xi seeds in binary order and run Reiter-style
+  fixpoint closure for each seed (no resampling).
+- Strategy A: permutation-driven single-scan schedule with a priority
+  skipped-queue (older skipped rules revisited first).
+- Strategy B: permutation-driven single-scan schedule with a FIFO skipped-queue
+  (skipped rules move to the tail; terminate on a full no-progress round).
 
-### With Docker (pull from GHCR)
-
-```bash
-sh ./run.sh
-
-# equivalent manual commands:
-docker compose pull
-docker compose run --rm experiment
-```
-
-### With Docker (local build, optional)
-
-```bash
-docker build -t default-logic-exp .
-docker run --rm default-logic-exp
-```
-
-The default container source is GitHub Container Registry:
-`ghcr.io/aipeac/makinson-default-logics:latest`.
-
-### Via GitHub Actions
-
-The workflow at `.github/workflows/experiment.yml` runs automatically on every
-`push` and prints results to the workflow log.
-
----
-
-## Sample Output
-
-```
-=================================================================
-Default Logic Extension-Enumeration Experiment
-=================================================================
-
-Monte Carlo runs per n (A/B only)      : 10
-Strategy 0 Xi order                    : 0..(2^k-1)
-Max constructions per strategy run     : 200000
-
------------------------------------------------------------------
-n=8  |  conflict_pairs=2  |  extensions=4
-  [0] avg_trials=4.0   avg_checks=96.0   cap_hits=0/10
-  [A] avg_trials=...   avg_checks=...    cap_hits=.../10
-  [B] avg_trials=...   avg_checks=...    cap_hits=.../10
-  ratio A_checks/0_checks=...   B_checks/0_checks=...
-```
+For A/B we maintain a process tree of prefix permutations and apply a
+semantic cutoff: when a prefix already decides every conflict-pair, the
+remaining order is equivalent and that subtree is closed.
 
 
 ### Analysis (mathematical summary)
@@ -209,7 +154,9 @@ efficient than A.
 
 ---
 
-## Repository Structure
+## Experiment Code & Reproducibility
+
+### Repository Structure
 
 ```
 .
@@ -221,10 +168,33 @@ efficient than A.
 └── README.md
 ```
 
----
-
-## Requirements
+### Requirements
 
 * **SWI-Prolog ≥ 8.0** (uses `library(lists)`, `library(random)`,
   `library(apply)`)
-* Or Docker (with `docker compose`) to run without local Prolog installation.
+* Or **Docker** (with `docker compose`) to run without local Prolog installation.
+
+---
+### Running the Experiment
+
+#### Directly with SWI-Prolog
+
+```bash
+swipl -s experiment.pl
+```
+
+#### With Docker (pull from GHCR)
+
+```bash
+sh ./run.sh
+
+# equivalent manual commands:
+docker compose pull
+docker compose run --rm experiment
+```
+
+### Via GitHub Actions
+
+The workflow at `.github/workflows/experiment.yml` runs automatically on every
+`push` and prints results to the workflow log.
+

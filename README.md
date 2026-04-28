@@ -3,9 +3,9 @@
 Empirically compares three extension-construction schedules for propositional
 default theories, implemented in SWI-Prolog.
 
-- [Theory & Background](https://github.com/AIPEAC/Makinson-Default-Logics/blob/main/README.md#L12)
-- [Mathematical Analysis](https://github.com/AIPEAC/Makinson-Default-Logics/blob/main/maths/reiter-time-analysis.md)
-- [Run the program yourself](https://github.com/AIPEAC/Makinson-Default-Logics/blob/main/README.md#L157)
+- [Theory & Background](https://github.com/AIPEAC/Makinson-Default-Logics/edit/main/README.md#theory-model--background)
+  - [Mathematical Analysis](https://github.com/AIPEAC/Makinson-Default-Logics/edit/main/README.md#analysis-mathematical-summary)
+- [Run the program yourself](https://github.com/AIPEAC/Makinson-Default-Logics/edit/main/README.md#experiment-code--reproducibility)
 
 
 ---
@@ -84,10 +84,12 @@ remaining order is equivalent and that subtree is closed.
 
 ### Analysis (mathematical summary)
 
-- Given: 
-  $$a = num(atoms)$$
-  $$r = |\Delta|$$
-  $$n = |\Phi|$$
+- Given:
+
+$$a = num(atoms)$$
+$$r = |\Delta|$$
+$$n = |\Phi|$$
+
 - Unknowns: 
 $$num(extensions)$$
 
@@ -95,9 +97,13 @@ $$num(extensions)$$
 **Strategy 0 (deterministic Xi sweep, Reiter):** 
 
 - Average cost:
-$$T_0(r,n,a) = 2^{r}\Bigl(n+\frac{r}{2}\Bigr) + r2^{r} \cdot c\,(n+r)\,2^{a}$$
+
+$$T_0(r,n,a) = 2^{r}\Bigl(n+\frac{r}{2}\Bigr) + r2^{r} \cdot c\(n+r)2^{a}$$
+
 - given $(a \leq n) \land (r \in O(n))$
+
 $$T_0(r,n,a) \subset O(r\cdot n\cdot 2^a\cdot 2^r)\subseteq O(n^2\cdot 2^{O(n)})$$
+
 - Full proof in [reiter-time-analysis.md](./maths/reiter-time-analysis.md).
 
 **Strategy A (permutation single-scan, Makinson agenda-style):**

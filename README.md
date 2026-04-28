@@ -95,7 +95,10 @@ $$num(extensions)$$
 **Strategy 0 (deterministic Xi sweep, Reiter):** 
 
 - Average cost:
-$$T_{avg​}(r,n,a)=2^r(n+\frac{r}{2})+r2^r⋅T_{SAT}​(n+r,a)$$
+$$T_0(r,n,a) = 2^{r}\Bigl(n+\frac{r}{2}\Bigr) + r2^{r} \cdot c\,(n+r)\,2^{a}$$
+- given $(a \leq n) \land (r \in O(n))$
+$$T_0(r,n,a) \subset O(r\cdot n\cdot 2^a\cdot 2^r)\subseteq O(n^2\cdot 2^{O(n)})$$
+- Full proof in [reiter-time-analysis.md](./maths/reiter-time-analysis.md).
 
 **Strategy A (permutation single-scan, Makinson agenda-style):**
 

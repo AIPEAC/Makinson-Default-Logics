@@ -154,7 +154,7 @@ $$
 \mathbb{E}[T] = m\cdot H_m = m\sum_{i=1}^m \frac{1}{i} \approx m(\ln m + \gamma),
 $$
 
-  where $H_m$ is the $m$th harmonic number and $\gamma$ is the Euler–Mascheroni
+  where $H_m$ is the $m$ th harmonic number and $\gamma$ is the Euler–Mascheroni
   constant. This is why random-resample A appears to require substantially more
   trials than $m$.
 

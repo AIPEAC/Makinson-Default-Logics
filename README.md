@@ -3,9 +3,6 @@
 Empirically compares three extension-construction schedules for propositional
 default theories, implemented in SWI-Prolog.
 
-- [Model & Background](https://github.com/AIPEAC/Makinson-Default-Logics/edit/main/README.md#theory-model--background)
-- [Run the program yourself](https://github.com/AIPEAC/Makinson-Default-Logics/edit/main/README.md#experiment-code--reproducibility)
-
 ---
 
 ## Model & Background
